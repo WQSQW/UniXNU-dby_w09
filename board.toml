@@ -31,6 +31,8 @@ include = ["ArmDTPlatform", "ArmCpu", "SoftwareAES", "ShengUfs", "VirtioMmioBloc
 #   GPT header @ LBA 8 (offset 4096)，分区项 128B/条，num_parts=64。
 #   userdata 条目：first_lba=2733568 (0x29B600), last_lba=30692863 (0x1D455FF)。
 #   LBA 单位 4096 字节（整盘 = 30693376 LBA × 4096 = 117.09 GiB ≈ 128G UFS）。
+#   注意：DBY-W09 的内存和存储都不是单一规格（同型号有 6/8 GiB RAM、128/256 GiB UFS）。
+#   上面这组 LBA 是本机（128 GiB）备份表里的实测值，换机必须读自己那份 GPT，不能照抄。
 #   userdata 容量 = (30692863-2733568+1) × 4096 = 106.66 GiB。
 #   这块分区里放着本机的 iPadOS 根卷：任何时候都不重新镜像它。
 # ---------------------------------------------------------------------------
@@ -190,8 +192,9 @@ size_mib = 208       # 带完整 AMFI 闭包的预链接内核放不进 cache �
                      # 所以负载卷刷 preload（0x57800000 = 1368 MiB）。
 loader = "firmware"
 title = "dby_w09 first boot: source 4K XNU to console"
-dram_size = "0x180000000"   # 6 GiB，必须等于 dts/dby_w09.dts 的 memory reg，否则
-                            # devicetree.py:306 直接报错
+dram_size = "0x180000000"   # 本机 6 GiB；同型号另有 8 GiB 版本，换机要连同 dts 的
+                            # memory reg 一起改。它必须等于 dts/dby_w09.dts 的 memory reg，
+                            # 否则 devicetree.py:306 直接报错
 skip_setup_tool = "scripts/seed-data-skip-setup.py"
 panic_screen = true
 kernel_args = [

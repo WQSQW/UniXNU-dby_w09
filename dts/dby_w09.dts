@@ -16,7 +16,9 @@
 
     memory@80000000 {
         device_type = "memory";
-        // 6 GiB LPDDR5 in one contiguous bank starting at 0x80000000.
+        // The tested unit has 6 GiB LPDDR5 in one contiguous bank starting at 0x80000000.
+        // DRAM size is a variant on this model (6 or 8 GiB), so this is a per-unit value:
+        // read it from the target unit and keep it equal to payload.dram_size in board.toml.
         // The ADT generator rejects any value that differs from payload.dram_size.
         reg = <0 0x80000000 1 0x80000000>;
     };

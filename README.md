@@ -1,11 +1,19 @@
 # UniXNU on the Huawei MatePad 11 (dby_w09)
 
-Device repository for the **DBY-W09** (Huawei MatePad 11, Qualcomm SM8250 / kona, 6 GiB RAM,
-128 GiB UFS). It carries the board description, the board device tree and XNU patch order, the
-kernel defconfig, the board package and build scripts, the firmware selection, the partition
-layout and the porting record. Shared XNU, driver and kit implementations come from
-[UniXNU](https://github.com/UniXNU/UniXNU); the SM8250 hardware description and the UFS driver
-come from the two feeds pinned in `feeds.toml`.
+Device repository for the **DBY-W09** (Huawei MatePad 11, Qualcomm SM8250 / kona). It carries
+the board description, the board device tree and XNU patch order, the kernel defconfig, the board
+package and build scripts, the firmware selection, the partition layout and the porting record.
+Shared XNU, driver and kit implementations come from [UniXNU](https://github.com/UniXNU/UniXNU);
+the SM8250 hardware description and the UFS driver come from the two feeds pinned in
+`feeds.toml`.
+
+Memory and storage are not fixed on this model. MatePad 11 units ship with 6 or 8 GiB of RAM and
+with 128 or 256 GiB of UFS, so both are per-unit inputs rather than board constants, and this
+record was measured on one 6 GiB / 128 GiB unit. Its values are written where they can be found:
+`dram_size` in `board.toml` and the `memory` node in `dts/dby_w09.dts` for DRAM, and the
+`userdata` LBA range in `board.toml` for storage. Any other unit needs its own values read first:
+`dram_size` has to equal the device tree's memory cell or the ADT generator refuses the pair, and
+the partition range has to come from that unit's own backup table rather than from these numbers.
 
 Target software: iPadOS 17.7.11 (build 21H461) with the donor identity `iPad7,1` / `j120ap`, the
 same verified combination as the official [sheng](https://github.com/UniXNU/UniXNU-sheng) port.
