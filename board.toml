@@ -1,0 +1,325 @@
+# 板级描述：华为 MatePad 11（DBY-W09，Qualcomm SM8250 / kona）。
+#
+# format 2（docs/porting/device-repository.md）：解析器按 arch → soc → os → device 四层读取，
+# 表按键合并、普通数组覆盖继承值。因此凡是 OS profile
+# （profiles/os/ipados-17.7.11-21H461/profile.toml）已经给出的值，这里一律不再重写：
+# [ipsw] + [ipsw.sha256]、整个 [kernel.prelink]（tool/kernel/slide/early_security_init/
+# kernelcache_sha256/31 项 roots）、[payload] trust_cache_sha256 与 text_fixups、
+# 以及 ADT 的 iPad7,1/J120 身份、/chosen 安全状态、/defaults kern.maxvnodes。
+# 逐键对拍结果（SAME/DIFF）记在 porting.toml 的 os-profile 区，删的每一行都以那次对拍为据。
+# 保留的只有本板实测值，并在旁边写明来源。
+
+schema_version = 2
+
+[board]
+name = "dby_w09"
+soc = "SM8250"
+soc_source = "sm8250"          # feeds.toml 里 kind = "soc" 的那条钉选
+os_profile = "ipados-17.7.11-21H461"
+description = "Huawei MatePad 11"
+kit = "dby_w09"                # 本仓 package/ 在构建树里出现为 kits/dby_w09
+
+# 目录规范 ID（components.toml）。Adreno740/AdrenoMetal 不在这里：SM8250 的 A650
+# 没有任何目录组件覆盖（soc:configs/sm8250.config 明写 # CONFIG_XNU_NATIVE_ADRENO is not set），
+# 是未移植项，不是省略。ShengHidInput/ShengNovatekTouch/QcomGeniSpi 也还没接（输入是
+# porting.toml 里记录的下一个卡点）。QcomXnuUsbDebug 先在本地分支验证，不进这条链。
+[components]
+include = ["ArmDTPlatform", "ArmCpu", "SoftwareAES", "ShengUfs", "VirtioMmioBlock", "RamBlock", "GopFramebuffer", "XnuPrelink", "DarwinBoot", "AppleKeyStoreState", "VerifiedRoot"]
+
+# ---------------------------------------------------------------------------
+# userdata：已取证（9008 完整备份 gpt_main0.bin，LUN 0）。
+#   GPT header @ LBA 8 (offset 4096)，分区项 128B/条，num_parts=64。
+#   userdata 条目：first_lba=2733568 (0x29B600), last_lba=30692863 (0x1D455FF)。
+#   LBA 单位 4096 字节（整盘 = 30693376 LBA × 4096 = 117.09 GiB ≈ 128G UFS）。
+#   userdata 容量 = (30692863-2733568+1) × 4096 = 106.66 GiB。
+#   这块分区里放着本机的 iPadOS 根卷：任何时候都不重新镜像它。
+# ---------------------------------------------------------------------------
+[userdata]
+first_lba = 0x29B600
+last_lba = 0x1D455FF
+lba_bytes = 4096
+windows = [
+  { name = "OS", component = "OS" },
+  { name = "SystemOS", component = "Cryptex1,SystemOS" },
+]
+
+# ---------------------------------------------------------------------------
+# kernel：config_fragments 按顺序生效，最后再叠 configs/dby_w09_defconfig，后写覆盖先写。
+# patch_series 四层拼接，这里把 device: 放在 os: 之前：sm8250 SoC 仓的 patches/xnu/series
+# 是空的，而 arch/os 两层都默认「本板会补上 native-smp-secondary 与 sheng-platform-power」
+# （官方 device-records/sirius.toml 对 sdm710 逐字记了这条依赖：sdm710 把它们放在 soc: 层，
+# soc: 排在 os: 之前）。zzz-boot-progress.patch 在 os: 层，它的 @@ -773,7 +775,9 @@ hunk
+# 把 sheng-platform-power 插入的那段当上下文，git apply 按解析出的顺序硬执行
+# （scripts/unixnu/patches.py:prepare），所以 device 层必须排在 os 层之前。详见本仓
+# patches/xnu/series 的说明。
+#
+# archives 顺序 = 内核链接要求的顺序：先产归档，bindings 步骤再把 original 绝对地址对象
+# 加进同一个归档（build-xnu-4k-baseline.sh 的 -Wl,-force_load 路径）。
+# component:<ID> 展开成目录里该组件的 build 配方（例如 ShengUfs → build-arm-driver.py ShengUfs，
+# 产出 build/sheng-ufs/libShengUfs.a）；kernel.py:archive_plan 要求所有 kernel 阶段
+# 有配方的组件都在这里出现，缺一个就直接报错。
+# 脚本查找顺序是 core → soc → device（scripts/unixnu/tree.py:assemble 的 bases），
+# 所以 build-boot-progress / build-link-stubs / build-platform-power /
+# build-gop-legacy-display 由本仓 scripts/ 提供是官方分层，不是自制入口。
+# ---------------------------------------------------------------------------
+[kernel]
+defconfig = "dby_w09_defconfig"
+config_fragments = ["arch:configs/common.config", "soc:configs/sm8250.config", "os:configs/ipados.config"]
+patch_series = ["arch:patches/xnu/series", "soc:patches/xnu/series", "device:patches/xnu/series", "os:patches/xnu/series"]
+archives = [
+  # arch:configs/common.config 打开 SOURCE_CORECRYPTO14 / SOURCE_PTHREAD，
+  # 这两个归档只有这两步会产。
+  "build-corecrypto-14.py",
+  "build-corecrypto-14.py --namespace",
+  "component:ArmDTPlatform",
+  "component:ArmCpu",
+  # SoftwareAES 是 NATIVE_VIRTIO_BLOCK / NATIVE_RAM_BLOCK 的硬前置
+  # （build-xnu-4k-baseline.sh 要求 XNU_NATIVE_AES=1）。bindings 在没有活体审计时
+  # 走 scripts/data/native-aes-original-bindings.S 的录制回退（官方行为）。
+  "component:SoftwareAES",
+  "build-software-aes-bindings.py",
+  # UFS 传输。feeds.toml 把它钉到带 SM8250 stream 配置的驱动源上。
+  "component:ShengUfs",
+  # 根设备发布要 NativeUfs 的 IOBlockStorageDevice/IOMedia 未定义符号绑到
+  # original kernelcache 的绝对地址。官方 core 只给了 Virtio/RamBlock 的
+  # build-virtio-mmio-bindings.py（--component 的 choices 里没有 NativeUfs），
+  # 所以这一步由设备仓自带 scripts/build-storage-bindings.py 承担：它读的
+  # build/storage-abi/interface-audit.json 是官方 audit-storage-interface.py 在本板
+  # 活体取证的产物。记录在 porting.toml 的 storage 区，属于「上游缺配方」而不是「我们绕过」。
+  "build-storage-bindings.py --component NativeUfs --archive libShengUfs.a --directory build/sheng-ufs",
+  # 策略选择器：导出 native_verified_block_root_authorized()，OWNER_ROOT_AUDIT 调它。
+  # VERIFIED_ROOT_PROBE=1 时 build-arm-driver.py 直接把归档写进 virtio-mmio-block-verified-bundle。
+  "component:VirtioMmioBlock",
+  # 官方入口是 build-virtio-mmio-bindings.py，逐字保留在下面这两行（官方 sheng/board.toml:29-32 的顺序就是 component:VirtioMmioBlock、component:RamBlock、--component RamBlock --directory build/ram-block、--component VirtioMmioBlock）：
+  #   "build-virtio-mmio-bindings.py --component RamBlock --directory build/ram-block",
+  #   "build-virtio-mmio-bindings.py --component VirtioMmioBlock",
+  # 它第 20 行无条件读设备自备的 build/storage-abi/interface-audit.json（docs/porting/migration.md:335 把它列为构建输入），第 27 行还要里面的活体标志；core 里没有任何脚本产它（scripts/unixnu/kernel.py:183 只把 IOStorageFamily 头拷进 build/storage-abi/include），本板活体审计从未跑完（format-1 的 build/storage-abi/ 只剩参考对象与 compile.log）。所以这两步先走设备层录制推导（format-1 硬件验证过的同一份 bindings）让 pass 通，官方活体审计作为发布前必补的门记在 porting.toml 的 storage 区。
+  "build-storage-bindings.py --component NativeVirtioBlock --archive libVirtioMmioBlock.a --directory build/virtio-mmio-block --subset",
+  # defconfig 把块驱动归档指向 verified bundle（和官方 sheng 的 configs/sheng_defconfig:19 同一形状），
+  # 官方入口就是 build-arm-driver.py 的这两个开关（docs/concepts/security.md:57 按容量选择策略包），
+  # 产物 build/virtio-mmio-block-verified-bundle/libVirtioMmioBlock.a 由 kernel.py:141 的 *_ARCHIVE 门校验。
+  "build-arm-driver.py NativeVirtioBlock --verified-root --verified-root-bundle",
+  # defconfig 把 XNU_NATIVE_VIRTIO_BLOCK_ARCHIVE 指向这个 bundle 归档，链接门 build-xnu-4k-baseline.sh:701-709
+  # 要求归档旁边有 bindings.json，并按归档名去 lib 前缀后的同名 .o 核对它的 sha256；bundle 里的对象按
+  # 运行时类名命名，所以这一步（官方文档 docs/porting/migration.md:330-341 允许设备自带 recipe）补 bindings
+  # 记录，并由脚本按同名发布同一份编译产物。产物 build/virtio-mmio-block-verified-bundle/libVirtioMmioBlock.a
+  # 同时满足 kernel.py:141 的 *_ARCHIVE 门。
+  "build-storage-bindings.py --component NativeVirtioBlock --archive libVirtioMmioBlock.a --directory build/virtio-mmio-block-verified-bundle --subset",
+  # 可写 /private/var 必须由 RamBlock 发布真 IOMedia（md0/memdev 路线实测失败：
+  # APFS 拒绝挂裸 memdev，内核 panic "offline scratch Data mount failed: 2"）。
+  # 官方 baseline 会把这份 bindings.json 和 virtio 的共用 original 符号逐条对拍，
+  # 并要求 compiled_object_sha256 对上 NativeRamBlock.o。
+  "component:RamBlock",
+  "build-storage-bindings.py --component NativeRamBlock --archive libRamBlock.a --directory build/ram-block --subset",
+  # payload 的 native-ufs-root 硬门要求内核里有 _sheng_pmgr_run。
+  "build-platform-power.py",
+  # 双卷（OS + SystemOS）verified-root policy bundle，喂给
+  # CONFIG_XNU_VERIFIED_ROOT_ARCHIVE。
+  # libVerifiedRootProbe.a 按官方形状自备进构建树（docs/guide/build-kernel.md:108「an archive that no
+  # builder makes must be supplied in the build tree」），官方 sheng/alioth 的 archives 里也没有这一步，
+  # 只在 configs/sheng_defconfig:20 引用产物。官方命令逐字留着：
+  #   "build-verified-root-probe.py --component os --include-systemos",
+  # 它在这台机器上跑不动：build-verified-root-probe.py:136 原样复用 bsd_init.o 的编译记录，记录里是
+  # -Weverything 且没有 -Wno-unsafe-buffer-usage，官方钉住的 clang-24 因此把 kits/VerifiedRoot/src/
+  # verified_root.c 判成 39 个 -Werror；而官方 build-arm-driver.py:66-79 的做法是先剥掉记录里所有 -W
+  # 再自带警告集。components.toml:437-453 给 VerifiedRoot 的规格是 build_stage=embedded、build=[]、
+  # outputs=[]，core 没有 Linux 侧配方。产物来源：format-1 用同一份 policy（manifest/anchor 的 sha256
+  # 已在本脚本对拍）编同一份官方 kit C，那份内核是上过硬件、到过锁屏的。
+  # libBootProgress.a：BOOT_PROGRESS 走全局 EXTRA_CFLAGS，同时是屏幕上有
+  # 阶段带/pulse 条的开关。它引用的 sheng 专属计数器由下面的 link-stubs 给零值定义。
+  "build-boot-progress.py",
+  "build-link-stubs.py",
+  "build-libpthread-kernel.py",
+  "component:AppleKeyStoreState",
+  # legacy 显示后端：NativeLegacyDisplay + NativeGOPPresenter + 板级 probe。
+  # 必须在驱动配方之后，因为它读它们的编译记录。
+  "build-gop-legacy-display.py",
+]
+
+# ---------------------------------------------------------------------------
+# 设备树：format 2 的硬件描述。板级 DTS 只写硬件（内存、启用的 CPU、外设开关），
+# Apple 平台属性在 OS profile 里，板级差异写在下面 [adt.*]。
+# dtc 编译与 ADT 生成都由 scripts/unixnu/devicetree.py + scripts/make-adt.py 完成，
+# format 1 的自制 scripts/make-dby_w09-adt.py 已退役。
+# ---------------------------------------------------------------------------
+[device_tree]
+source = "device:dts/dby_w09.dts"
+include_dirs = ["soc:dts"]
+
+# ---------------------------------------------------------------------------
+# firmware：uefi-sheng/UniXNUPkg 派生的 Mu-Silicium 移植（Platforms/Huawei/dby_w09Pkg）。
+# 我们的 UEFI 编译链目前在 VM 里手动跑，所以 [firmware] 只是把产物路径写对，
+# unixnu build firmware 还不是本板的构建入口——这一点记在 porting.toml 里。
+# ---------------------------------------------------------------------------
+[firmware]
+config = "dby_w09"                 # Resources/Configs/dby_w09.toml
+dsc = "Platforms/Huawei/dby_w09Pkg/dby_w09.dsc"
+fd = "Build/dby_w09Pkg/{target}_CLANGPDB/FV/SILICIUM_UEFI.fd"
+preflight = ["scripts/check-dby_w09.py"]
+patches = ["Resources/MuPatches/Gic-Spurious.patch"]
+packages = [
+  "{uefi}",
+  "{uefi}/Platforms/Huawei",
+  "{tree}/package",
+  "{tree}/drivers/DarwinBoot",
+  "{edk2}",
+  "{uefi}/Common/Mu",
+  "{uefi}/Common/Mu_OEM_Sample",
+  "{uefi}/Silicon/Qualcomm",
+  "{uefi}/Silicon/Silicium",
+  "{uefi}/Silicium-ACPI",
+  "{uefi}/Silicium-ACPI/Platforms/Huawei",
+  "{uefi}/Silicium-ACPI/Silicon/Qualcomm",
+]
+
+[firmware.defines]
+ENABLE_SECUREBOOT = "1"
+DEVICE_MODEL = "dby_w09"
+MEMORY_PROTECTION = "TRUE"
+SHIP_MODE = "FALSE"
+BUILDID_STRING = "dby_w09-research"
+
+# ---------------------------------------------------------------------------
+# payload：每个 kernel_arg 旁边的注释写它对应哪一条官方门或哪个补丁代码，删参数前先读那条注释。
+# trust_cache_sha256 / text_fixups 不在这里——profile 的两枚原始 bundle 哈希与我们用的完全一致。
+# ---------------------------------------------------------------------------
+[payload]
+volume = "DBYW09ESP"
+size_mib = 208       # 带完整 AMFI 闭包的预链接内核放不进 cache 分区
+                     # （实测 partition-size:cache = 0x6800000 = 104 MiB），
+                     # 所以负载卷刷 preload（0x57800000 = 1368 MiB）。
+loader = "firmware"
+title = "dby_w09 first boot: source 4K XNU to console"
+dram_size = "0x180000000"   # 6 GiB，必须等于 dts/dby_w09.dts 的 memory reg，否则
+                            # devicetree.py:306 直接报错
+skip_setup_tool = "scripts/seed-data-skip-setup.py"
+panic_screen = true
+kernel_args = [
+  "-v",
+  "serial=3",
+  "debug=0x14e",
+  "sheng-smp=1",
+  "offline-legacy-register=1",
+  "offline-legacy-gop=1",
+  "offline-legacy-validate=1",
+  "offline-legacy-retire=1",
+  "boot-progress=2",
+  "sheng-build-tag=uit1",
+  "offline-apfs-load=1",
+  "offline-mobile-graphics-load=1",
+  "-apfs_shared_datavolume",
+  # NativeUfs 默认 stream 0x60 是 sheng 的板子；SM8250 走 0x0e0 / 0x4e0。
+  "native-ufs-stream=0xe0",
+  "native-ufs-stream2=0x4e0",
+  # 根设备发布门（NativeUfs.cpp start()：`if (rootMode && !probe) return startRoot(provider)`）。
+  # probe=10 是只读取证，和 root 互斥，所以必须用 root=1，否则永远不发布 IOMedia。
+  "native-ufs-root=1",
+  # AMFI 硬门：payload.py 见到 native-ufs-root=1 就要求恰好一个 sheng-pmgr=2，
+  # 且内核里链了 _sheng_pmgr_run，否则原封不动的目标 AMFI 会 panic "No PMGR"。
+  "sheng-pmgr=2",
+  # watchdogd 因 Data 卷没有 role 而 BRK #1，com.apple.watchdogd.plist 的 _PanicOnCrash
+  # 会把这一下升级成内核 panic。Data 挂载门还没开，所以先按官方 bring-up 做法抑制，
+  # 好让 initproc 之后的失败可读。
+  "panic_on_crash_disabled=1",
+  # 以下每一项都对应本轮从官方 core 补进树里的补丁，参数本身由补丁里的代码读取：
+  #  zzyb-native-cryptex-os-view.patch -> 提供 SystemOS cryptex 视图，配合 -apfs_shared_datavolume
+  #  zzyc-owner-skip-launch-constraints.patch -> 放宽 launch constraints，让原始 iPadOS 用户态可 exec
+  # sheng-staged-apps 关闭：官方 UniXNU-sheng 只有 disable-watchdogd / disable-jobs / data-persist。
+  # 开它内核会把 OS 卷约 25 MiB 的 staged_system_apps 复制进 Data 种子，容器放不下，
+  # BootWatchdogPolicy.c 写 disabled.plist 得到 ENOSPC 28，内核在 kern_exec.c:8201 panic。
+  "kt_fixed_zones=120",
+  # offline-legacy-unit-scale=1 发布 /chosen display-scale，SpringBoard 的
+  # -[FBSDisplayMode _initWithWidth:height:preferredScale:] 读的就是它。缺它 preferredScale=0，
+  # 合法性检查在 FBS+0xf744 触发 brk #0，SpringBoard 永远起不完。上游限定态是
+  # unit_scale_calls==chosen_scale==1、unit_scale_status==0；本板早先传 2 时对拍门没过，
+  # DISPLAY 停在 8，1 才是官方 GOP 1:1 值。
+  "offline-legacy-unit-scale=1",
+  "offline-legacy-pm=1",
+  "offline-legacy-transfer=1",
+  "offline-legacy-cpu-present=1",
+  "offline-legacy-phase=4",
+  "offline-mobile-graphics-client=1",
+  "offline-hid-home=1",
+  "offline-hid-input=1",
+  "offline-key-events=1",
+  # sheng-aks=1 让 AppleKeyStoreState 的 user client 如实回答状态查询（无钥匙串、未锁定）。
+  # 绝不加 offline-keystore=1：两者互斥，KeyStoreProbe.cpp:91 在它存在时直接放弃替身。
+  "sheng-aks=1",
+  # 官方 debugging 文档：boot-ui-focus 替换第二个采样槽（默认 backboardd）。默认 trace_slot[0]=0，
+  # launchd 自身不被追踪；只有 launchd 活着时 boot_ui_trace_ready 永远是 0，UI trace 画不出来。
+  "boot-ui-focus=launchd",
+  "boot-ui-focus4=SpringBoard",
+  "sheng-data-persist=2",
+  "sheng-data-reset=1",
+  "sheng-disable-watchdogd=1",
+  "sheng-disable-jobs=com.apple.identityservicesd,com.apple.locationd,com.apple.CommCenter,com.apple.bluetoothd",
+  "armcpu-diagnostics=1",
+  # boot-diag-resume=3600：面板要交给系统。取 10 时，只要 UI 连续 10 秒没扫出新内容诊断页就抢回去，
+  # 而这对手屏（Always-On）是正常的，于是平板在系统画面和我们那页之间来回。3600 是
+  # BootProgress.c:535 接受的最大值。
+  "boot-diag-resume=3600",
+  "armcpu-spi-ipi=1",
+  "-no_slto_panic",
+]
+
+# ---------------------------------------------------------------------------
+# DarwinBoot 交接开关（devicetree.py 的 options = config['payload']['adt']）：
+# 只有这五个键属于这里，设备身份和平台默认值写在下面的 [adt.*]。
+# ---------------------------------------------------------------------------
+[payload.adt]
+chip_id = "207"                       # 按 16 位读（devicetree.py:312），与 format 1 同值
+owned_memory_size = "0x100000000"     # 4 GiB DarwinBoot 连续窗口；不写就是 256 MiB 默认窗口，
+                                      # XNU 只能拿到 256 MiB。同 SM8250 的官方 alioth 取值。
+root_match_volume_uuid = "04769D26-2CA0-4825-B443-E2E5F88300F2"   # OS 窗口自己的卷 UUID
+unique_chip_id = "required"           # 真值由 --unique-chip-id HEX 传入（每次出镜像的板级种子）
+# 内核开了 CONFIG_XNU_NATIVE_RAM_BLOCK，交付的是稀疏 DBRDISK1 种子，ADT 必须写
+# PackedRAMDisk；写 RAMDisk 时 DarwinBoot 在 DarwinBoot.c:558 以 EFI_COMPROMISED_DATA 拒收。
+packed_data_ramdisk = true
+# 可写 Data 卷是本机 userdata 里的持久卷，不是易失夹具 → 不发布 ephemeral-storage。
+# persistent_data  deliberately NOT set: the hardware-proven ADT (payload-reset.img,
+# adt_sha256 d92b0972) publishes /chosen/ephemeral-storage=1, and devicetree.py:333
+# emits it whenever --data-ramdisk is passed and persistent_data is absent. Reproducing
+# that boot must not silently change the Data-volume semantics.
+# # persistent_data  deliberately NOT set: the hardware-proven ADT (payload-reset.img,
+# adt_sha256 d92b0972) publishes /chosen/ephemeral-storage=1, and devicetree.py:333
+# emits it whenever --data-ramdisk is passed and persistent_data is absent. Reproducing
+# that boot must not silently change the Data-volume semantics.
+# persistent_data = true
+
+# ---------------------------------------------------------------------------
+# 板级 ADT 覆盖：顶层 [adt.*]（devicetree.py 的 platform = config['adt']），
+# 不是 [payload.adt.*]。profiles.merge() 是递归字典合并，逐键盖住 profile 的值。
+# 这里只留三组本板实测值，其余身份/安全状态/maxvnodes 全部沿用 profile。
+# ---------------------------------------------------------------------------
+
+# /product：机型串按本板；artwork-device-subtype 用本机面板长边 2160，
+# 不是 donor iPad Pro 12.9 的 2732；thin-bezel 是 format 1 已验证链上的值。
+[adt.product.string]
+model = "huawei,dby_w09"
+
+[adt.product.u32]
+artwork-device-subtype = 2160
+thin-bezel = 1
+
+# 本板没实现 suspend/resume：用原始根域策略输入，而不是让 CPU 永久停车。
+[adt.defaults.u32]
+sleep-disabled = 1
+
+# /buttons：DBY-W09 没有 Home 键，所以 button-names 不带 menu，
+# home-button-type = 2（纯手势），锁屏给滑动解锁并画 home indicator。
+[adt.buttons.string]
+compatible = "buttons"
+device_type = "buttons"
+
+[adt.buttons.strings]
+button-names = ["hold", "voldown", "volup"]
+
+[adt.buttons.u32]
+home-button-type = 2
+
+# 已知上游缺口（记录，不绕过）：format 2 的公共生成器不产 /pram 节点，也不写
+# /chosen/embedded-panic-log-size，所以 pexpert check_for_panic_log() 在
+# CONFIG_XNU_DT_PANIC_REGION=y（defconfig 里开着）下走设备树分支、找不到 pram 就直接返回，
+# 不映射任何内存。官方 alioth 记的是同一件事（board.toml:196-198、configs/alioth_defconfig:12-19）。
+# 本板的 panic 证据通道因此是 panic_screen=true 的屏上文本 + boot_progress_panic_text，
+# 不是 RAM 里的 embedded-panic-log。

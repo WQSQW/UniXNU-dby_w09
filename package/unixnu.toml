@@ -1,0 +1,17 @@
+version = 1
+
+[boot]
+timeout = 3
+default = "preflight"
+
+[[entry]]
+id = "preflight"
+title = "dby_w09 boot diagnostics"
+type = "efi"
+path = "Payloads/DbyW09Preflight.efi"
+
+[[entry]]
+id = "exit"
+title = "Return to firmware"
+type = "action"
+action = "exit"

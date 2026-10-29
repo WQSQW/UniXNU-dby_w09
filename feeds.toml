@@ -1,0 +1,24 @@
+# 本板的源钉选（会写进 unixnu.lock，发布前逐条复核 URL 与 commit）。
+#
+# Apple 参考源（xnu、libplatform、libdispatch、AvailabilityVersions、edk2、libpthread、
+# corecrypto-2023、IOStorageFamily）由基础仓 feeds.toml 钉住，这里不重复。
+# 机器相关路径永不写进本文件：拷 local.toml.example 到被忽略的 local.toml，
+# 或在命令行用 --local-module。见 https://unixnu.com/porting/device-repository。
+
+# SM8250 / kona 共享硬件描述：dts/sm8250.dtsi、configs/sm8250.config、patches/xnu/series。
+# [board] soc_source = "sm8250" 指的就是这条。
+[[source]]
+name = "sm8250"
+kind = "soc"
+git = "https://github.com/FFT-infra/UniXNU-sm8250-common"
+commit = "6bb9b025704764a662728dce1a30557a35e082d8"
+
+# 官方目录里的 ShengUfs 是 SM8550 范围的（hardware = ["SM8550 UFS controller"]、
+# board_dependencies 里写死 SM8550 clocks/SMMU），本板要的是同一驱动里带
+# SM8250 stream（0x0e0 / 0x4e0）与 qcom,sm8250-ufshc 匹配的这支。
+# 目录 ID 保持不变，只把源换掉——这也是 alioth（同为 SM8250）的做法。
+[[source]]
+name = "ShengUfs"
+kind = "driver"
+git = "https://github.com/FFT-infra/NativeUfs-alioth"
+commit = "ab5405905a1892da03a9a53e0fa3dcd255d04055"

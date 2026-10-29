@@ -1,0 +1,43 @@
+// SPDX-License-Identifier: BSD-3-Clause
+// Huawei MatePad 11 (DBY-W09), Qualcomm SM8250 / kona, 8 Kryo 585 cores.
+//
+// Sources: the tablet's own Android device tree (kona-v2.1.dts plus the
+// DBY/W09_VA overlay) for the DRAM base, size and CPU affinity numbering, and
+// the shared SM8250 description from the pinned SoC repository for the
+// controller registers. Board memory, enabled CPUs and enabled peripherals
+// belong here; registers and interrupt geometry belong in sm8250.dtsi.
+
+/dts-v1/;
+/include/ "sm8250.dtsi"
+
+/ {
+    model = "Huawei MatePad 11";
+    compatible = "huawei,dby_w09", "qcom,kona", "qcom,sm8250";
+
+    memory@80000000 {
+        device_type = "memory";
+        // 6 GiB LPDDR5 in one contiguous bank starting at 0x80000000.
+        // The ADT generator rejects any value that differs from payload.dram_size.
+        reg = <0 0x80000000 1 0x80000000>;
+    };
+};
+
+// All eight cores run: four Kryo 585 Silver (Cortex-A55) and four Gold (Cortex-A77).
+&cpu0 { status = "okay"; };
+&cpu1 { status = "okay"; };
+&cpu2 { status = "okay"; };
+&cpu3 { status = "okay"; };
+&cpu4 { status = "okay"; };
+&cpu5 { status = "okay"; };
+&cpu6 { status = "okay"; };
+&cpu7 { status = "okay"; };
+
+// Storage: the root volume is the UFS disk, so the host controller and its QMP
+// PHY are the peripherals this board enables. sm8250.dtsi keeps both disabled
+// until a board selects a storage component.
+&ufs { status = "okay"; };
+&ufsphy { status = "okay"; };
+
+// Not enabled, with a reason recorded in porting.toml rather than silence:
+//   gpu / gpu_smmu    - no catalog component provides the A650 (Adreno 650) path yet.
+//   qupv3_id_0        - the touch panel's serial engine; the input component is not ported.

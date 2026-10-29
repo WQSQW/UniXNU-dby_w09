@@ -1,0 +1,136 @@
+# Kernel configuration of the dby_w09 image. CONFIG_XNU_<NAME> becomes XNU_<NAME> for the kernel build.
+#
+# DBY-W09 = Huawei MatePad 11, SM8250 (kona), AArch64.
+# 这是最小 defconfig：只保留与 SoC 无关的通用 XNU 项，删掉了 sheng 的
+# SM8550/Adreno740 专属项（CONFIG_XNU_SHENG_PMGR / CONFIG_XNU_NATIVE_ADRENO /
+# CONFIG_XNU_NATIVE_LEGACY_DISPLAY 等）。SM8250/Adreno650 的显示/GPU/电源驱动
+# 要单独移植，当前阶段（bring-up 阶段 2→3）先不启用。
+
+# 通用平台与 CPU（AArch64，所有设备都需要）
+CONFIG_XNU_ARM_DT_PLATFORM=y
+CONFIG_XNU_ARMCPU=y
+CONFIG_XNU_NATIVE_ARCH_TIMER=y
+CONFIG_XNU_NATIVE_PAN=y
+
+# 存储：DBY-W09 是 UFS。FFT-infra/NativeUfs-alioth 组件显式带 qcom,sm8250-ufshc；
+# 只读硬件取证阶段已结束（probe=10 拿过 bring-up/capacity/SHNGROOT 证据），
+# 现在按下面的 VERIFIED_ROOT_PROBE 走根设备发布。
+CONFIG_XNU_NATIVE_UFS=y
+# 说明：官方 iig 路线下内核里不再有自制 storage-family 归档，libNativeUfs.a 需要的
+# IOBlockStorageDevice 符号（__ZTV20IOBlockStorageDevice 等）由
+# scripts/build-storage-bindings.py 绑到 original kernelcache 的绝对地址上（board.toml archives）。
+
+# 密码学/信任（UniXNU 通用）
+# NativeAES 是 NATIVE_VIRTIO_BLOCK / NATIVE_RAM_BLOCK 的硬前置：
+# build-xnu-4k-baseline.sh:254-272 两者都要求 XNU_NATIVE_AES=1（限定的 original storage/AES
+# 预链接闭包）。它只多编一个对象与一个 archive，不动全局 EXTRA_CFLAGS。
+CONFIG_XNU_NATIVE_AES=y
+# 运行期 trust cache：sheng_defconfig 第 11 行就是 =y，我们之前关着，
+# 关掉的成本不是「少一个诊断」而是「exec 链断」：
+# build-xnu-4k-baseline.sh:285-297 把它做成 startup.o_CFLAGS_ADD=-DXNU_NATIVE_TRUST_CACHE=$MODE
+# （单对象重编 + 一次重链，不进全局 EXTRA_CFLAGS），并且换模式时只删 startup.o。
+# 编进去的这段才是开机把 payload 里那枚原始 bundle 装载进内核 trust cache 槽的代码；
+# 没有它，即使 payload 带了缓存，AMFI 查 launchd cdhash 依旧查不到 → namespace 9 / code 8。
+CONFIG_XNU_TRUST_CACHE_RUNTIME=y
+CONFIG_XNU_NATIVE_CS_HASH_CACHE=y
+
+# 基础组件（UniXNU 通用）
+CONFIG_XNU_SOURCE_CORECRYPTO14=y
+CONFIG_XNU_SOURCE_PTHREAD=y
+
+# 根设备发布 + 根认证 + 用户态链（本次的真根因修复）
+#
+# 没有 VERIFIED_ROOT_PROBE 时官方 build-arm-driver.py 用 -DNATIVE_UFS_PROBE_ONLY=1 编 NativeUfs：
+# NativeUfs::start() 里 `if (rootMode && !probe) return startRoot(provider);` 整段被 #if 排除，
+# 只剩 probe-only 分支的 hostBringUp()，所以永远不发布 IOBlockStorageDevice/IOMedia，
+# IOFindBSDRoot 等十轮 ROOTDEVICETIMEOUT 后 panic "Failed to mount root device"。
+# 打开它需要一整套前置（已跑通）：OS + SystemOS 双卷 verified-root policy、
+# build-verified-root-probe.py --component os --include-systemos 的 libVerifiedRootProbe.a、
+# NativeVirtioBlock 的 MULTI_POLICY 归档（它导出 native_verified_block_root_authorized()，
+# 经 weak native_ufs_block_authenticates() 走到 UFS 窗口），以及官方录制 storage bindings。
+CONFIG_XNU_VERIFIED_ROOT_PROBE=y
+CONFIG_XNU_NATIVE_VIRTIO_BLOCK=y
+CONFIG_XNU_OWNER_ROOT_AUDIT=y
+CONFIG_XNU_OWNER_ROOT_TRUST=y
+# launchd 之前的用户态链，顺序固定（build-xnu-4k-baseline.sh:441-530）：
+# CACHE_MOUNT 要 ROOT_TRUST，CACHE_STARTUP 要 CACHE_MOUNT，BOOT_MANIFEST 要 CACHE_STARTUP，
+# UNION_SYSTEMOS 要 CACHE_STARTUP 且 CRYPTEX_FILES 关。全走 per-object 戳，只重编
+# kern_exec.o / IOKitBSDInit.cpo，不触发整树重编。
+# 21H461 实测：OS 卷里没有 System/Library/Caches/com.apple.dyld（0 个文件），
+# dyld shared cache 全在 Cryptex1,SystemOS（54 个文件 / 3.99 GB），所以必须联合挂载。
+CONFIG_XNU_OWNER_CACHE_MOUNT=y
+CONFIG_XNU_OWNER_CACHE_STARTUP=y
+CONFIG_XNU_OWNER_BOOT_MANIFEST=y
+CONFIG_XNU_OWNER_UNION_SYSTEMOS=y
+# AMFI 硬门：payload 侧 scripts/unixnu/payload.py:46-52 见到 native-ufs-root=1 就要求
+# 恰好一个 sheng-pmgr=2 且内核里有 _sheng_pmgr_run，否则直接拒产出镜像
+# （"the unchanged target AMFI otherwise panics with No PMGR"）。归档由
+# scripts/build-platform-power.py 产出（官方 alioth 版，原样拷进设备仓）。
+CONFIG_XNU_SHENG_PMGR=y
+# Data 卷可写挂载要 payload 带官方 owner-data seed，而 seed 只能在 macOS 上产出
+# （scripts/prepare-owner-data-fixture.py 用 hdiutil create -fs APFS + diskutil info）。
+# 先单独打开 RAM 传输，把「归档编得出来、bindings 和 virtio 的 11 个共用符号对得上、
+# 内核链得进去」这三个门在 seed 到手续完（build-xnu-4k-baseline.sh:766-793 的对拍）。
+CONFIG_XNU_NATIVE_RAM_BLOCK=y
+# 这两个开关和 UUID 一起等云编译的 seed.json：DATA_MOUNT 要 BOOT_MANIFEST（已有，:495-498），
+# 而 baseline:499-514 只在 DATA_MOUNT=1 且 RAM_BLOCK=1 时才要求
+# CONFIG_XNU_OWNER_DATA_VOLUME_UUID 是真 UUID（写进 build/xnu/owner-data-volume.h）。
+CONFIG_XNU_OWNER_DATA_MOUNT=y
+
+# 两个归档路径：policy bundle 是双卷（OS 6,077,580,800 + SystemOS 3,303,014,400），
+# 由 scripts/build-verified-root-probe.py --component os --include-systemos 产出；
+# virtio 归档在 build 树里，所以用官方 {tree} 占位符（kernel.py xnu_env 展开）。
+# 两行都只用官方 {tree} 占位符（kernel.py:xnu_env 展开），不再写构建机的绝对路径：
+# verified-root 归档由 build-verified-root-probe.py --component os --include-systemos 产在
+# 本板构建树的 build/verified-root-os-xnu-bundle/ 下。留空则回退到
+# build/verified-root-xnu/，那是单卷 bundle，不是本板用的双卷 bundle。
+CONFIG_XNU_VERIFIED_ROOT_ARCHIVE="{tree}/build/verified-root-os-xnu-bundle/libVerifiedRootProbe.a"
+CONFIG_XNU_NATIVE_VIRTIO_BLOCK_ARCHIVE="{tree}/build/virtio-mmio-block-verified-bundle/libVirtioMmioBlock.a"
+
+# 启动进度（bring-up 阶段看进度用）
+# NativeUfs.cpp:90/2100 用 weak_import 引 boot_progress_poll，静态内核链不会放过未定义符号：
+# VERIFIED_ROOT_PROBE=1 之后编出的是真 doAsyncReadWrite 路径，所以必须给官方提供器。
+# 官方提供器就是这一档：build-xnu-4k-baseline.sh:93-99 跑 scripts/build-boot-progress.py，
+# :808-810 用 -Wl,-force_load 链 build/boot-progress/libBootProgress.a；:844 把它做成全局
+# -DXNU_BOOT_PROGRESS=1（代价：全树重编）。同时这也是屏幕上有阶段带/pulse 条的开关。
+CONFIG_XNU_BOOT_PROGRESS=y
+# 前置依赖已经补齐（VERIFIED_ROOT_PROBE + OWNER_ROOT_AUDIT + NATIVE_VIRTIO_BLOCK +
+# SOURCE_CORECRYPTO14 全为 1，build-xnu-4k-baseline.sh:88-92 的门现在能过）。
+# 这里仍关着只剩一个理由：BOOT_PROGRESS 走全局 EXTRA_CFLAGS（脚本 line 844），
+# 打开它会把整棵树重编一遍；本次要的是「先换根发布这一个变量」，所以留到重编时再开。
+# patches/xnu/zzz-boot-progress.patch 与 board.toml 的 boot-progress=2 都保留着。
+# NATIVE_PAN 也走全局 EXTRA_CFLAGS（line 614）。DBY-W09 的 Kryo 585 是 ARMv8.2 带 PAN，
+# 官方 sheng_defconfig:26 与 qemu_root_defconfig 都开；关着时内核 copyio 不执行 msr pan,#0，
+# 第一次内核访问用户页（launchd 的 mach_vm_allocate）就吃 PAN 权限故障并在 __bcopyin 重试死循环。
+
+# 调试/诊断（可选，bring-up 时打开便于取证）
+CONFIG_XNU_DT_PANIC_REGION=y
+
+# 加密 bootstrap 方式（与 sheng 一致）
+
+# 链死符号补前置：官方机制是 CONFIG_XNU_EXTRA_LD_ARCHIVES（build-xnu-4k-baseline.sh:812 把它
+# 追加到 KERNEL_EXTRA_ARCHIVES 尾部，普通归档路径，不是 force_load，所以只按未定义符号惰性拉取）。
+# 提供器是 alioth 的同款官方文件 package/LinkStubs.c + package/BootProgressStubs.c（原样拷进本仓），
+# 由 scripts/build-link-stubs.py 编成 build/link-stubs/libLinkStubs.a。
+# 原因：libBootProgress.a 引用 sheng 专属组件（GOP 显示 / Novatek 触摸 / cpufreq / RAM 盘 / HID）的
+# 计数器，我们用不到的这些组件没链，静态内核链又不放过 weak_import 未定义符号（alioth 也这样写：
+# configs/alioth_defconfig:87-90）。桩都是 weak 零值：读到 0 就是「该组件没做过任何事」，
+# 以后真链上某个组件时，真定义自动赢过桩。
+CONFIG_XNU_EXTRA_LD_ARCHIVES="{tree}/build/link-stubs/libLinkStubs.a"
+CONFIG_XNU_CRYPTO_BOOTSTRAP="prelinked"
+
+# 数据卷 UUID —— 占位符，选定目标 IPSW + 取证后才填
+CONFIG_XNU_OWNER_DATA_VOLUME_UUID="5DC572E3-3EDF-4D5A-9686-E2DFB577982F"
+
+# 显式关闭的项（sheng 有、但 SM8250 阶段先不开）
+# CONFIG_XNU_ARMVIRT_PLATFORM is not set
+# CONFIG_XNU_NATIVE_MOBILE_DISPLAY is not set
+# 官方 porting/display.md 第 2 步：链 GopFramebuffer 的 legacy 显示后端，让 IOMobileFramebufferLegacy
+# 真发布出系统显示（DISPLAY stage 离开 0），backboardd 才有可打开的显示服务。归档由
+# scripts/build-gop-legacy-display.py 产出，offline-component-load-probes.patch 会调它的两个入口，
+# 所以这个开关和 archives 里的那一行必须同时开。
+CONFIG_XNU_NATIVE_LEGACY_DISPLAY=y
+# CONFIG_XNU_NATIVE_ADRENO is not set
+# CONFIG_XNU_SOURCE_MOCKFS is not set
+# 注意：不要再在这里补 OWNER_ROOT_AUDIT / NATIVE_VIRTIO_BLOCK 的 "is not set" 行，
+# defconfig 是后写覆盖先写，那样会把上面打开的根发布链重新关掉。

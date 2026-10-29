@@ -1,0 +1,29 @@
+# Device patch paths, one per line in application order.
+#
+# Two core patches are named by neither the ARM64 nor the OS series, and the
+# official records say they must still be present:
+# docs/xnu/patch-reference.md lists native-smp-secondary under "Platform and
+# CPU", and docs/.vitepress/device-records/sirius.toml records for sdm710 that
+# "the ARM64 and OS series assume the two files they omit are present ... Both
+# now live in the sdm710 SoC series, which applies before the OS series".
+# UniXNU-sm8250-common@6bb9b025 ships an empty patches/xnu/series, so the board
+# layer supplies them here, referencing the core-owned files through the same
+# arch: prefix the OS series uses for zzz-boot-progress.patch; nothing here is
+# a device-local rewrite of XNU.
+#
+# native-smp-secondary: MAX_CPUS 4 -> 8 plus MPIDR Affinity1 core numbering for
+# BCM2837. dts/sm8250.dtsi numbers this board's eight Kryo 585 cores as
+# reg = <0 0x0 0x100 ... 0x700>, i.e. the core index sits in Affinity1, so
+# without this patch sheng-smp=1 still brings up one core.
+#
+# sheng-platform-power: the sheng_pmgr_run() call site in bsd_init.c that
+# CONFIG_XNU_SHENG_PMGR=y needs, and the block zzz-boot-progress.patch quotes as
+# unchanged context at its @@ -773,7 +775,9 @@ hunk.
+#
+# Order in [kernel] patch_series: this file is listed before os: rather than
+# last. git apply runs the resolved sequence literally (scripts/unixnu/patches.py
+# prepare), and the OS series' zzz-boot-progress.patch hunk only applies once the
+# block above already exists, so the canonical arch/soc/os/device order cannot be
+# satisfied while the SoC series stays empty.
+arch:../../../patches/xnu/native-smp-secondary.patch
+arch:../../../patches/xnu/sheng-platform-power.patch

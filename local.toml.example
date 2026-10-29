@@ -1,0 +1,17 @@
+# Copy this file to local.toml (ignored by Git) to keep machine-specific paths out of the
+# repository. Only the kinds below are read from it, and each value is a directory whose
+# subdirectories are taken as modules of that kind:
+#
+# [local]
+# drivers = "~/Code/unixnu-dby-drivers"
+# kits = "~/Code/unixnu-dby-kits"
+# patches = "~/Code/unixnu-dby-patches"
+# scripts = "~/Code/unixnu-dby-scripts"
+#
+# Apple reference sources (kind refer) are not taken from this file. Override one with a command
+# line local module, or with a `local = "DIR"` key on the matching entry of a feeds.toml:
+#
+#   ./unixnu build kernel -D ../UniXNU-dby_w09 --local-module refer:xnu=~/Code/xnu
+#
+# Relative paths resolve from this file; ~ and environment variables expand first.
+# `unixnu status` prints the effective source of every module.

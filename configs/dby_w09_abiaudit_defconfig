@@ -1,0 +1,25 @@
+# Qualification-only configuration used to produce the candidate that scripts/audit-storage-interface.py
+# reads. It is identical to dby_w09_defconfig except that the block driver is left out, because a
+# kernel that re-exports the IOBlockStorageDevice methods cannot be used to qualify the original
+# Apple IOStorageFamily dispatch (the audit requires 176 of 190 slots bound to the untouched class).
+# Deliverable builds use dby_w09_defconfig.
+
+CONFIG_XNU_ARM_DT_PLATFORM=y
+CONFIG_XNU_ARMCPU=y
+CONFIG_XNU_NATIVE_ARCH_TIMER=y
+# CONFIG_XNU_NATIVE_PAN is not set
+
+# Block driver off for the ABI qualification candidate only.
+# CONFIG_XNU_NATIVE_UFS is not set
+
+# CONFIG_XNU_NATIVE_AES is not set
+# CONFIG_XNU_TRUST_CACHE_RUNTIME is not set
+CONFIG_XNU_NATIVE_CS_HASH_CACHE=y
+
+CONFIG_XNU_SOURCE_CORECRYPTO14=y
+CONFIG_XNU_SOURCE_PTHREAD=y
+
+# CONFIG_XNU_BOOT_PROGRESS is not set
+CONFIG_XNU_DT_PANIC_REGION=y
+CONFIG_XNU_CRYPTO_BOOTSTRAP="prelinked"
+CONFIG_XNU_OWNER_DATA_VOLUME_UUID="00000000-0000-0000-0000-000000000000"
