@@ -27,3 +27,4 @@
 # satisfied while the SoC series stays empty.
 arch:../../../patches/xnu/native-smp-secondary.patch
 arch:../../../patches/xnu/sheng-platform-power.patch
+restore-omitted-public-headers.patch

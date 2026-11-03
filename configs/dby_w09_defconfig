@@ -94,6 +94,10 @@ CONFIG_XNU_NATIVE_VIRTIO_BLOCK_ARCHIVE="{tree}/build/virtio-mmio-block-verified-
 # :808-810 用 -Wl,-force_load 链 build/boot-progress/libBootProgress.a；:844 把它做成全局
 # -DXNU_BOOT_PROGRESS=1（代价：全树重编）。同时这也是屏幕上有阶段带/pulse 条的开关。
 CONFIG_XNU_BOOT_PROGRESS=y
+# USB CDC-ACM 调试控制台（QcomXnuUsbDebug）没有接入这条链：board.toml 的 kernel_args
+# 注释记录了 2026-11-01 摘除的原因（write 轮询 DWC3 一直不枚举）。补丁与源码留在工作区，
+# 不参与本基线。
+# CONFIG_XNU_QCOM_USB_DEBUG is not set
 # 前置依赖已经补齐（VERIFIED_ROOT_PROBE + OWNER_ROOT_AUDIT + NATIVE_VIRTIO_BLOCK +
 # SOURCE_CORECRYPTO14 全为 1，build-xnu-4k-baseline.sh:88-92 的门现在能过）。
 # 这里仍关着只剩一个理由：BOOT_PROGRESS 走全局 EXTRA_CFLAGS（脚本 line 844），
@@ -116,7 +120,10 @@ CONFIG_XNU_DT_PANIC_REGION=y
 # 计数器，我们用不到的这些组件没链，静态内核链又不放过 weak_import 未定义符号（alioth 也这样写：
 # configs/alioth_defconfig:87-90）。桩都是 weak 零值：读到 0 就是「该组件没做过任何事」，
 # 以后真链上某个组件时，真定义自动赢过桩。
-CONFIG_XNU_EXTRA_LD_ARCHIVES="{tree}/build/link-stubs/libLinkStubs.a"
+# DbyTouch 用普通归档路径（不 force_load）：BootProgress.c 强引用 dby_touch_probe_entry()，
+# 惰性拉取一定会发生；它内部的 stage 轮询线程由驱动自己起，不靠初始化函数被扫到。
+CONFIG_XNU_EXTRA_LD_ARCHIVES="{tree}/build/link-stubs/libLinkStubs.a {tree}/build/dby-touch/libDbyTouch.a"
+
 CONFIG_XNU_CRYPTO_BOOTSTRAP="prelinked"
 
 # 数据卷 UUID —— 占位符，选定目标 IPSW + 取证后才填

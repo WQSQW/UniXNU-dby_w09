@@ -24,7 +24,7 @@ kit = "dby_w09"                # 本仓 package/ 在构建树里出现为 kits/d
 # 是未移植项，不是省略。ShengHidInput/ShengNovatekTouch/QcomGeniSpi 也还没接（输入是
 # porting.toml 里记录的下一个卡点）。QcomXnuUsbDebug 先在本地分支验证，不进这条链。
 [components]
-include = ["ArmDTPlatform", "ArmCpu", "SoftwareAES", "ShengUfs", "VirtioMmioBlock", "RamBlock", "GopFramebuffer", "XnuPrelink", "DarwinBoot", "AppleKeyStoreState", "VerifiedRoot"]
+include = ["ArmDTPlatform", "ArmCpu", "SoftwareAES", "ShengUfs", "VirtioMmioBlock", "RamBlock", "GopFramebuffer", "XnuPrelink", "DarwinBoot", "AppleKeyStoreState", "VerifiedRoot", "ShengHidInput", "ShengNovatekTouch", "QcomGeniSpi"]
 
 # ---------------------------------------------------------------------------
 # userdata：已取证（9008 完整备份 gpt_main0.bin，LUN 0）。
@@ -132,9 +132,14 @@ archives = [
   "build-boot-progress.py",
   "build-link-stubs.py",
   "build-libpthread-kernel.py",
+  "component:ShengHidInput",
   "component:AppleKeyStoreState",
   # legacy 显示后端：NativeLegacyDisplay + NativeGOPPresenter + 板级 probe。
   # 必须在驱动配方之后，因为它读它们的编译记录。
+  # 触摸生产者：真机验证过的 DbyTouch（同一型号机子上跑通的实现），产出 build/dby-touch/libDbyTouch.a。
+  # 它走 defconfig 的 CONFIG_XNU_EXTRA_LD_ARCHIVES 普通路径，不是 force_load：BootProgress.c 里
+  # dby_touch_probe_entry() 是强引用，链接器按未定义符号一定会把它拉进来。
+  "build-dby-touch.py",
   "build-gop-legacy-display.py",
 ]
 
@@ -202,12 +207,65 @@ kernel_args = [
   "serial=3",
   "debug=0x14e",
   "sheng-smp=1",
+  # 触摸驱动阶段梯（package/DbyTouch/DbyTouch.cpp 读 dby-touch=）：8 = 取帧+接触点提取+发布，
+  # 并且跑厂商固件下载——这颗 N9Z 是无闪存 THP，主机每次开机不上传 0x30000 镜像就永远不上报。
+  # dby-touch-se=1 是单独一道门：本驱动从不做时钟投票，未上电读 SE 会挂死总线（2026-10-31 实测）。
+  "dby-touch=8",
+
+  "dby-touch-se=1",
+  "sheng-cpufreq=2",
+  # DriverKit 必须让开：不加 dk=0 时 AppleUserHIDEventDriver 抢走匹配，然后卡在
+  # "user server timeout"（机器上没有 AppleUserHIDDrivers 进程），事件根本出不了内核；
+  # 加上它才由内核内的 IOHIDEventDriver 接管这份 collection。
+  "dk=0",
+  # 官方持久化日志写入器（package/BootLog.c，1070 行向 native_ufs_log_open 要窗口）。
+  # 这是朋友套件 §6.1 唯一的取证通道：设备崩溃时没有第二双眼睛，日志窗口自己把那次开机
+  # 的每一行留在 userdata 尾部，fastboot oem edl 读满 8192 块后用 04-analyse/decode-thisboot.py 解。
+  # 落点安全性是本机实测而非抄来的：board.toml 记的 userdata 区间 first_lba=2733568(0x29B600)
+  # last_lba=30692863(0x1D455FF)，日志区是这段的最后 8192 块，距根镜像末界 0x29FBE4 约 106 GiB，
+  # 不碰 iPadOS 根卷；与 sheng-data-persist=2 并存是套件验证过的同一配置。
+  # 窗口由 native_ufs_log_open() 运行时给出，不是硬编码 LBA；autoreset 写入门（BootResetDby.c）
+  # 本仓没有，所以这一版只写不复位。
+  "sheng-log=1",
+  "sheng-touch-hid=1",
+  # 实体按键：PM8150 PON 的 KPDPWR(电源) / RESIN(音量减) + GPIO6(音量加)，
+  # 由 DbyTouch.cpp 的按键轮询线程读 RT_STS 后经 report 2 上报。
+  "sheng-buttons=1",
+  # Separate digitizer service (primary usage Digitizer/Touch Screen, Built-In). Without it the touch
+  # collection only rides at the tail of the keyboard descriptor, which backboardd does not consume.
+  # sheng-touch-split=1 is off: it builds a second Touch Screen device, native_touch_set_sink() is a single
+# global slot so only the last driver instance to start ever publishes, and HidInputProbe.cpp patches the
+# Built-In/PrimaryUsage pair onto the first device's event service only - which then has nothing to send.
+# alioth board.toml:694-699 and uke TOUCH-PORT.md:41 both record the same reason. sheng-touch-hid=1 above is
+# the required half and stays.
   "offline-legacy-register=1",
   "offline-legacy-gop=1",
   "offline-legacy-validate=1",
   "offline-legacy-retire=1",
   "boot-progress=2",
-  "sheng-build-tag=uit1",
+  # Read-only DWC3 inheritance probe (2026-11-04), panel rows 43..46.  It prints the
+  # GCC USB branches, the USB30 power domain, the block reset and the DWC3 mode,
+  # version, DSTS and address width, so one boot answers whether the firmware
+  # handover leaves the controller takeable.  It stores nothing: removing this line
+  # makes the payload byte-identical to the previous build.
+  # The CDC-ACM kernel console over this board's DWC3 (QcomXnuUsbDebug, the same channel the
+  # hardware-verified alioth board uses; docs/devices/alioth.md records it as the SM8250 debug
+  # route). It tees printf, kprintf, IOLog and the panic drain onto a USB serial port that
+  # enumerates as 1209:316d "QcomXnuUsbDebug", so the touch rows and stage counters arrive as
+  # text on the host instead of as a photograph of the diagnostic page.
+  # REMOVED 2026-11-01. This was the only USB-related difference between the current payload and
+  # f2-payload-461538fa (the format-2 payload that never hung when the cable was pulled), and the
+  # official hazard note spells out the failure mode: qcom_usb_debug_write() polls the DWC3
+  # (poll_owned(), plus a 1 ms flush window in diag mode). The console never enumerated on the
+  # host either (no 1209:316d), so every tee'd printf/kprintf/IOLog has been polling a controller
+  # that never came back -- and when the cable is pulled the poll has no owner left to find.
+  # Evidence: community-components/alioth-qud/docs/evidence/2026-10-27-boot-diagnostics.md
+  # sheng-build-tag removed here: it is the panel session label, and package/BootProgress.c:213
+  # states its purpose as "so a photograph says which image it is". The USB console now carries
+  # the record itself, and each run is named by the kernel sha256 that payload.json records, so
+  # this row had no reader left. Its 21 bytes are also the reserve for qcom-usb-ctl=1, which is
+  # the documented next step and would otherwise not fit under the 1000-byte gate
+  # (payload.py:35, DarwinBoot's 1024-byte command-line buffer).
   "offline-apfs-load=1",
   "offline-mobile-graphics-load=1",
   "-apfs_shared_datavolume",
@@ -236,7 +294,10 @@ kernel_args = [
   # 合法性检查在 FBS+0xf744 触发 brk #0，SpringBoard 永远起不完。上游限定态是
   # unit_scale_calls==chosen_scale==1、unit_scale_status==0；本板早先传 2 时对拍门没过，
   # DISPLAY 停在 8，1 才是官方 GOP 1:1 值。
-  "offline-legacy-unit-scale=1",
+  # 2026-11-04 00:30: 1 -> 2. At 1 the OS lays out on 1600 x 2560 logical points, so a 10.8" panel
+  # renders iPad UI at half size ("UI 太小了", owner report after the touch fix). 2 = 800 x 1280 pt,
+  # iPad Pro 11 territory. Touch is published in real pixels and does not depend on this number.
+  "offline-legacy-unit-scale=2",
   "offline-legacy-pm=1",
   "offline-legacy-transfer=1",
   "offline-legacy-cpu-present=1",

@@ -137,3 +137,34 @@ __attribute__((weak)) void sheng_dpu_probe(void);
 __attribute__((weak)) void sheng_dpu_probe(void)
 {
 }
+
+/* Novatek touch bring-up: no extracted firmware image for this panel yet (the controller runs its own
+   flash image, so identification and frame reads still work), and no sheng-swipe synthetic input
+   source. Both are optional in package/TouchProbe.cpp, which skips the download when the size is zero. */
+__attribute__((weak)) const unsigned char native_touch_firmware[] = {0};
+__attribute__((weak)) const unsigned int native_touch_firmware_size = 0;
+__attribute__((weak)) volatile unsigned int native_hid_input_command = 0;
+
+/* Physical-key sink for NativeHidInput. sheng's ButtonProbe.cpp provides it; this board's keys are
+   handled in firmware and carry no XNU transport driver, so registering a sink is a no-op here. */
+__attribute__((weak)) void native_buttons_set_sink(void (*sink)(void *), void *context);
+__attribute__((weak)) void native_buttons_set_sink(void (*sink)(void *), void *context)
+{
+    (void)sink;
+    (void)context;
+}
+
+// QcomXnuUsbDebug declares this weak_import at kernel/QcomXnuUsbDebug.c:128 and only asks
+// whether the address is non-null before calling it. alioth and sheng implement it in
+// package/BootReset.c, which maps the devicetree reboot-reason window and writes the
+// bootloader cell before PSCI. This port has no BootReset.c, so this weak stub is the
+// honest answer for the board: the reset path declines, qcom_usb_debug_control_reset_now
+// prints "QCOM USB REBOOT refused: rc=01" through the CPU backlog and then falls through
+// to the profile's platform_smc_reset(), which is the reset this board already uses.
+__attribute__((weak)) int boot_reset_bootloader(char *text, unsigned cap);
+__attribute__((weak)) int boot_reset_bootloader(char *text, unsigned cap)
+{
+	(void)text;
+	(void)cap;
+	return 1;
+}

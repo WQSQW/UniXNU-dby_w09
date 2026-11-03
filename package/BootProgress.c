@@ -103,6 +103,12 @@ extern char *debug_buf_base __attribute__((weak_import));
 extern unsigned int kernel_debugger_entry_count __attribute__((weak_import));
 extern volatile uint32_t native_cpufreq_stage __attribute__((weak_import));
 extern volatile unsigned native_touch_stage_req __attribute__((weak_import));
+// The touch driver's single entry point, defined by build/dby-touch/libDbyTouch.a
+// (scripts/build-dby-touch.py). Naming it here is what makes the plain archive path pull it, and
+// the counters say so on the page: runs counts the attempts and ret the last return code.
+extern int dby_touch_probe_entry(void);
+static unsigned dby_touch_hook_runs;
+static int dby_touch_hook_ret,dby_touch_probe_done;
 extern volatile unsigned boot_process_passes,boot_process_seen __attribute__((weak_import));
 extern volatile unsigned boot_process_attempts __attribute__((weak_import));
 extern volatile unsigned boot_process_busy __attribute__((weak_import));
@@ -169,11 +175,11 @@ static int take(void) {
 }
 static void release(void) { __atomic_store_n(&busy, 0, __ATOMIC_RELEASE); }
 // The text of every page row and of the last banner paint, for the UFS log (BootLog.c).
-char boot_progress_page_text[48][BP_COLS];
+char boot_progress_page_text[49][BP_COLS];
 char boot_progress_banner_text[49][120];
 volatile unsigned boot_progress_banner_rows;
 static void capture(unsigned row, const char *text) {
-  if(row<48){strncpy(boot_progress_page_text[row],text,BP_COLS-1);boot_progress_page_text[row][BP_COLS-1]=0;}
+  if(row<49){strncpy(boot_progress_page_text[row],text,BP_COLS-1);boot_progress_page_text[row][BP_COLS-1]=0;}
 }
 static void line(unsigned row, const char *text, uint32_t color) {
   capture(row,text);
@@ -425,11 +431,21 @@ static void draw(unsigned now) {
   if(&native_touch_stage_req && native_touch_stage_req && &native_touch_rows) {
     // Touch replaces the TIMER/OBS rows (42-43) while it is requested: its summary row and the HID report counters.
     line(42,native_touch_rows[0],0xff00ffcc);
+    // Row 1 is the driver's second line (pin census / SE identity); it has only four rows, and
+    // index 4 never existed - the old producer's array was five wide.
+    line(47,native_touch_rows[1],0xff00ffcc);
+    // Row 2 is the firmware picker's verdict: which project image was selected and whether the
+    // answer came from the device (oeminfo) or from the built-in default.
+    line(52,native_touch_rows[2],0xff88ddff);
+    // Row 3 is the button producer: the PMIC lines it actually read, the mask it published,
+    // the APIDs it resolved and how many reports reached the sink.
+    line(53,native_touch_rows[3],0xffffcc44);
     if(&native_hid_input_events) {
-      snprintf(b,sizeof(b),"TOUCH HID started=%u driver=%u touch-reports=%u result=%d key-reports=%u | pad dots=%u",
-        native_hid_input_events[2],native_hid_input_events[4],native_hid_input_events[6],native_hid_input_results[6],
-        native_hid_input_events[5],touch_dots);
-      line(43,b,0xff00ffcc);
+      snprintf(b,sizeof(b),"TOUCH HID started=%u drv=%u key-reports=%u touch-reports=%u res=%d | pad dots=%u",
+        native_hid_input_events[2],native_hid_input_events[4],native_hid_input_events[5],
+        native_hid_input_events[6],native_hid_input_results[6],touch_dots);
+      // Section 7.3: row 48 is outside the 48-row grid, so it is captured for the userdata archive, not drawn.
+      capture(48,b);
     }
   } else line(43,b,0xffaaaaaa);
   if(&native_ufs_verify_ticks && &native_ufs_read_ticks) {
@@ -1020,24 +1036,30 @@ static void touch_overlay(void) {
 static void touch_overlay_locked(void) {
   if(!display.bound || __atomic_load_n(&display.yield_requested,__ATOMIC_ACQUIRE))return;
   static const uint32_t palette[4]={0xffff4040,0xff40ff40,0xff4080ff,0xffffff40};
-  static unsigned frame_drawn;
+  /* The pad is a scaled copy of the PANEL, so its box carries the panel's own 1600 x 2560 shape.
+   * It used to be 20320/30480 - the touch core's sensor frame (3048 x 2032, i.e. 1.5:1 the other way
+   * round) - which drew a LANDSCAPE rectangle onto a portrait panel: 80 % of the width by 33 % of the
+   * height of the very panel it claimed to show.  The owner reported exactly that: "the touch box
+   * points a different way than the screen, yet the direction inside it is right, and everything is
+   * squeezed into it".  A mirror drawn with the sensor's aspect is not a mirror.
+   *
+   * The mirror stays a mirror: dot x = published x / 30480 across padW, dot y = published y / 20320
+   * down padH, so a press on a panel corner lands on that corner of the pad.  Both published axes
+   * are top-down since 2026-11-04 (DbyTouch.cpp dbyTouchPublishContact), like the pad itself. */
   unsigned textEnd=(BP_COLS)*6*display.scale+8;
-  unsigned padX=textEnd,padW=display.width>textEnd+40?display.width-textEnd-24:0;
+  unsigned padX=textEnd+8;
+  if(display.width<=padX+80)return;
+  unsigned availW=display.width-padX-8,padY=display.height*12/100;
+  if(display.height<=padY+40)return;
+  unsigned padH=display.height-padY-8,padW=(unsigned)((uint64_t)padH*1600u/2560u);
+  if(padW>availW){padW=availW;padH=(unsigned)((uint64_t)padW*2560u/1600u);}
   touch_pad_w=padW;
-  if(padW<200)return;
-  unsigned padH=(unsigned)((uint64_t)padW*20320/30480),padY=display.height*45/100;
-  if(padY+padH+8>=display.height)return;
-  // Frame, corner markers and heartbeat about once a second (they are tens of thousands of uncached stores, far too much
-  // for every 30 ms pass); dots are never erased, so the trail persists in between.
-  static unsigned decor_pass;
-  if((decor_pass++&31)==0) {
-  touch_fill(padX-4,padY-4,padX+padW+3,padY-1,0xffffffff);touch_fill(padX-4,padY+padH,padX+padW+3,padY+padH+3,0xffffffff);
-  touch_fill(padX-4,padY,padX-1,padY+padH-1,0xffffffff);touch_fill(padX+padW,padY,padX+padW+3,padY+padH-1,0xffffffff);
-  touch_fill(padX,padY,padX+30,padY+30,palette[0]);touch_fill(padX+padW-31,padY,padX+padW-1,padY+30,palette[1]);
-  touch_fill(padX,padY+padH-31,padX+30,padY+padH-1,palette[2]);touch_fill(padX+padW-31,padY+padH-31,padX+padW-1,padY+padH-1,palette[3]);
-  (void)frame_drawn;
-  touch_fill(padX,padY-30,padX+19,padY-11,(decor_pass>>5)&1?0xff00ff00:0xffff00ff);   // heartbeat: the overlay thread is running
-  }
+  if(padW<160||padH<160)return;
+  /* A 2 px frame, so the pad reads as a picture of the screen and not as a limit on where touch may go. */
+  touch_fill(padX,padY,padX+padW-1,padY+1,0xff5a1c1c);
+  touch_fill(padX,padY+padH-2,padX+padW-1,padY+padH-1,0xff5a1c1c);
+  touch_fill(padX,padY,padX+1,padY+padH-1,0xff5a1c1c);
+  touch_fill(padX+padW-2,padY,padX+padW-1,padY+padH-1,0xff5a1c1c);
   uint32_t seq=__atomic_load_n(&native_touch_seq,__ATOMIC_ACQUIRE);
   if(seq&1)return;
   unsigned n=native_touch_count;if(n>12)n=12;
@@ -1047,7 +1069,9 @@ static void touch_overlay_locked(void) {
   if(__atomic_load_n(&native_touch_seq,__ATOMIC_ACQUIRE)!=seq)return;
   for(unsigned i=0;i<n;++i) {
     if(xs[i]<0||ys[i]<0)continue;
-    unsigned px=padX+(unsigned)((uint64_t)xs[i]*padW/30480),py=padY+(unsigned)((uint64_t)ys[i]*padH/20320);
+    // ys is top-down since 2026-11-04 (DbyTouch.cpp dbyTouchPublishContact), same direction as this pad,
+    // so the dot lands under the finger without a second flip.
+    unsigned px=padX+(unsigned)((uint64_t)xs[i]*padW/30480),py=padY+(unsigned)((uint64_t)(unsigned)ys[i]*padH/20320);
     if(px<padX+4||py<padY+4||px+4>=padX+padW||py+4>=padY+padH)continue;
     // One colour per contact slot; the newest dot gets a white centre so the direction of a swipe is visible.
     touch_fill(px-4,py-4,px+4,py+4,i<4?palette[i]:0xffffffff);
@@ -1084,6 +1108,18 @@ static void monitor(void *arg, wait_result_t result) {
     if(boot_process_snapshot)boot_process_snapshot();
     if(boot_log_tick)boot_log_tick(now);
     if(sheng_cpufreq_poll)sheng_cpufreq_poll();
+    // Touch bring-up: start the driver once the system owns the machine. It maps the GENI SE and
+    // QUP wrapper windows, and at dby-touch=8 uploads the vendor firmware, so it must run on a
+    // thread (not an interrupt context) and after the first user process exists. A non-zero return
+    // means the hardware was not ready yet, so the entry is retried - at most three times.
+    if(!__atomic_load_n(&dby_touch_probe_done,__ATOMIC_RELAXED) && !ml_at_interrupt_context()
+       && nprocs>0 && dby_touch_hook_runs<3) {
+      if(__atomic_exchange_n(&dby_touch_probe_done,1,__ATOMIC_ACQ_REL)==0) {
+        dby_touch_hook_runs++;
+        dby_touch_hook_ret=dby_touch_probe_entry();
+        if(dby_touch_hook_ret!=0)__atomic_store_n(&dby_touch_probe_done,0,__ATOMIC_RELEASE);
+      }
+    }
     if(boot_ui_trace_snapshot)boot_ui_trace_snapshot(now);
     if(&boot_process_attempts && &boot_process_busy) {
       unsigned attempt=__atomic_load_n(&boot_process_attempts,__ATOMIC_RELAXED);

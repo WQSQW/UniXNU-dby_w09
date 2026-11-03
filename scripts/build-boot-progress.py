@@ -106,6 +106,7 @@ for probe_name in ('BootProcessProbe.c', 'BootUiTraceProbe.c'):
     subprocess.run(probe_command, cwd=policy_record['directory'], check=True, timeout=120)
     probe_objs.append(str(probe_obj))
 
+
 archive = OUT / 'libBootProgress.a'
 archive.unlink(missing_ok=True)
 subprocess.run(['xcrun', 'ar', 'rcs', str(archive), str(obj), str(fault_obj), str(policy_obj), *probe_objs], check=True, timeout=30)

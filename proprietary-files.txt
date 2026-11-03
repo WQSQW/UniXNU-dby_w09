@@ -8,9 +8,11 @@
 # path|sha256    file relative to .cache/firmware
 # -path|sha256   optional file: a missing one is reported, not an error
 #
-# Provenance of every file below is Apple's restore image. No vendor firmware is required by this
-# port: there is no touch controller firmware, no Adreno ZAP firmware and no modem or DSP blob,
-# because input and GPU are not ported yet.
+# Provenance of every file below is Apple's restore image, except the touch entries at the end, which come from this
+# model's own stock package (see @fetch/SECTION notes there). The claim this file used to carry - that the port needs no
+# vendor firmware at all - was written before the touch bring-up reached stage 4 and is wrong: the controller's
+# command mailbox, its firmware image and the panel's AFE decoding library are vendor files, and the official input
+# record (core/docs/porting/input.md) names the firmware object as a stage-4 requirement.
 
 # KernelCache member, decompressed from kernelcache.im4p. The prelinker reads its original
 # __TEXT_EXEC extents and instruction hashes; kits/XnuPrelink and scripts/*.py refuse any change.
@@ -30,6 +32,29 @@ target-volumes/static-trustcache.bin|da88460e6e513438d5307e5c526f76497a74754476a
 # the Data fixture. Their hashes are pinned by board.toml [ipsw.sha256]:
 #   044-76040-038.dmg 3f99b859c9728379110b66657c7b15285bcb1925ad8b5726542e2cdcf8b1028d
 #   044-76034-038.dmg b4908cde41d23e6bc05e6af51a2c9eeb00cf0f863a6a18b1600c96a3fd70414f
+
+# Touch (Huawei THP, Novatek N9Z series: huawei_thp@10 support_vendor_ic_type = <0x05>, b01.dts:10083).
+#
+# SOURCE is a directory holding this model's stock system as unpacked from its super image, so the official route
+# applies unchanged:  python3 scripts/extract-files.py <stock-package-dir> --section Touch
+#
+# There is no standalone TP firmware file in that package: the image runs from the panel's own flash (the novatech
+# child sets project_in_tp = <0x00>, b01.dts:10115, and the vendor's THP driver has no download path at all - only
+# the STATUS_CMD/gesture/sleep commands of novatek_thp.c:975-1160), so gen-touch-firmware.py has no blob to embed and
+# emits size 0. What the port really needs from this package is the other half of the protocol: the kernel hands the
+# 8208-byte burst to userspace untouched (huawei_thp_core.c:3807 -> :3575) and the closed AFE library is the only
+# thing that has ever decoded it. Those files are reference inputs for this port's decoder - they stay out of Git and
+# never go into an image. Digests are of the files as shipped in that package; extract-files.py refuses a mismatch.
+#
+# Touch
+-thp_project_id_match_rules.xml|949521a1b80e778caf6a7f19911eff5054e1371057d4d7c5ece8ff52e55f03b7
+-vendor/lib64/libthp_v3.so|3887498ce1d921c9a003840a3d2099572a629235ed33f4dc8e9fcb3a9f7b8b1a
+-vendor/lib64/libafehalW2599Z1100.so|d0635489e5638ca7b855463dbdb6ea1b50b79e965c7e596d35e7d1b2ef938045
+-vendor/lib64/libafehalW2599Z1300.so|226cfbb977c443404ad77237db4aa619a3a61b985bf4f239404e58a5c7a7cf07
+-vendor/lib64/libafehalW259AX1100.so|839de8e0d6c211aac448b2b94dc1a0df82c041105661b27ef1a054044eb4668b
+# Touch: a controller that does need a host download would put its image under novatek/ here, and the build
+# Touch: would embed it. No row exists for this panel because the panel holds its own image (see above).
+# novatek/novatek_n9z_fw.bin|<sha256 of the extracted image>
 
 # The scratch Data volume seed is derived from the mounted OS volume on macOS (hdiutil is required,
 # see https://unixnu.com/guide/userdata). It is passed to the payload with --data-ramdisk and is

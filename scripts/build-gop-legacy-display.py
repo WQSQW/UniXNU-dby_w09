@@ -205,6 +205,24 @@ cmd+=['-Wall','-Wextra','-Werror','-Wno-unused-parameter','-Wno-unnecessary-virt
       '-Wno-deprecated-enum-enum-conversion','-I',str(ROOT/'.cache/xnu-work/osfmk')]
 run(cmd,cwd=r['directory'])
 probe=OUT/'LegacyDisplayProbe.o'
+TOUCH=OUT/'touch';TOUCH.mkdir(exist_ok=True)
+touch_include=['-I',str(ROOT/'kits/dby_w09')]
+# HidInputProbe.cpp is the only place the owned IOHIDDevice is created and started: allocate the IOHIDDevice
+# subclass, attach it to IOHIDResource, then start it, which is what brings up the 8 ms touch timer that turns
+# native_touch_seq into HID reports. LinkStubs.c keeps a weak no-op native_hid_input_probe() for boards that do
+# not select this component; without the real object here that no-op is what runs and no digitizer ever exists.
+hid_cpp=ROOT/'kits/dby_w09/HidInputProbe.cpp';hid_cpp_obj=TOUCH/'HidInputProbe.o'
+run([str(hid_cpp) if str(a)==str(source) else str(hid_cpp_obj) if str(a)==str(probe) else a for a in cmd]+touch_include,
+    cwd=r['directory'])
+# The IOHIDDevice subclass is component:ShengHidInput, listed ahead of this recipe in board.toml, so its build
+# directory already holds the late-staged object (mod_init section removed, initialiser globalised). Carry that
+# object here for the same reason the key-store stand-in below is carried: the kernel links in one pass, and a
+# library listed before this archive has already been scanned by the time HidInputProbe's reference appears.
+hid_drv_obj=ROOT/'build/sheng-hid-input/NativeHidInput.late.o'
+# The class vtable is not compiled here: IOHIDFamily is a kext, so the component build pins IOHIDDevice's vtable to
+# the original kernel address instead (__ZTV11IOHIDDevice, an absolute symbol). Without this object the link fails
+# on the vtable of every NativeHidInput virtual.
+hid_bindings_obj=ROOT/'build/sheng-hid-input/hid-original-bindings.o'
 archive=OUT/'libNativeLegacyDisplay.late.a';archive.unlink(missing_ok=True)
 # The kernel force-loads exactly this archive, and the official sheng/qemu recipe uses that to carry the
 # AppleKeyStore stand-in in it too (build-native-legacy-display.py:255): KeyStoreProbe.o plus the late-staged
@@ -223,10 +241,11 @@ run([objcopy,'--remove-section=__DATA,__mod_init_func',
 require(code(keyevents.read_bytes(),macho(keyevents.read_bytes()))==
         code(keyevents_late.read_bytes(),macho(keyevents_late.read_bytes())),
         'Owned event-service instructions unchanged by late init staging')
-run(['xcrun','ar','rcs',archive,late,OUT/'original-bindings.o',probe,keystore_obj,keyevents_late])
+run(['xcrun','ar','rcs',archive,late,OUT/'original-bindings.o',probe,keystore_obj,keyevents_late,hid_cpp_obj,hid_drv_obj,hid_bindings_obj])
 sources=[ROOT/'drivers/GopFramebuffer/NativeLegacyDisplay.cpp',
          ROOT/'drivers/GopFramebuffer/NativeLegacyRequest.h',source,
-         keystore_source,ROOT/'drivers/NativeKeyStoreEvents/NativeKeyStoreEvents.cpp']
+         keystore_source,ROOT/'drivers/NativeKeyStoreEvents/NativeKeyStoreEvents.cpp',hid_cpp,
+         ROOT/'kits/dby_w09/SmmuBypass.h']
 # The presenter is its own official component build; only its initializer registration moves to late staging.
 print(run(['python3',ROOT/'scripts/build-arm-driver.py','NativeGOPPresenter'],text=True),end='')
 gop=ROOT/'build/native-gop-presenter';gop_late=gop/'NativeGOPPresenter.late.o'

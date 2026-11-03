@@ -43,3 +43,7 @@ __pycache__/
 *.key
 .env
 local.toml
+# Local backups kept on disk only
+*.bak
+*.bak_*
+*.bak-*

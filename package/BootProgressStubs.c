@@ -73,9 +73,12 @@ __attribute__((weak)) uint32_t native_legacy_transfer_calls;
 __attribute__((weak)) int native_legacy_transfer_status;
 __attribute__((weak)) uint64_t native_ram_block_resident_bytes;
 __attribute__((weak)) uint32_t native_ram_block_sparse;
-__attribute__((weak)) uint32_t native_touch_count;
+// NativeHidInput.cpp externs this without weak_import and writes one per touch report, so it
+// needs a definition even on a board whose HID layer never reports.
+__attribute__((weak)) volatile uint32_t native_touch_hid_reports;
+__attribute__((weak)) volatile uint32_t native_touch_count;
 __attribute__((weak)) uint32_t native_touch_loop_step;
-__attribute__((weak)) unsigned native_touch_stage_req;
+__attribute__((weak)) volatile unsigned native_touch_stage_req;
 __attribute__((weak)) uint32_t native_ufs_matched;
 __attribute__((weak)) uint32_t native_ufs_probe_calls;
 __attribute__((weak)) uint64_t native_ufs_read_ticks;
@@ -163,7 +166,7 @@ __attribute__((weak)) uint64_t boot_process_rows[10][120];
 __attribute__((weak)) uint64_t boot_progress_banner_text[49][120];
 __attribute__((weak)) uint64_t boot_progress_ext[8][48];
 __attribute__((weak)) uint64_t boot_progress_ext_wide[2][112];
-__attribute__((weak)) uint64_t boot_progress_page_text[48][120];
+__attribute__((weak)) uint64_t boot_progress_page_text[49][120];
 __attribute__((weak)) uint64_t boot_progress_panic_text[2048];
 __attribute__((weak)) uint64_t boot_progress_throw_text[330];
 __attribute__((weak)) uint64_t boot_ui_trace_label[120];
@@ -235,13 +238,13 @@ __attribute__((weak)) uint64_t native_touch_edge_stats[4];
 __attribute__((weak)) uint64_t native_touch_extent[4];
 __attribute__((weak)) uint64_t native_touch_hid_multi[3];
 __attribute__((weak)) uint64_t native_touch_hold[14];
-__attribute__((weak)) uint64_t native_touch_ids[12];
+__attribute__((weak)) volatile int native_touch_ids[12];
 __attribute__((weak)) uint64_t native_touch_jitter[3];
-__attribute__((weak)) uint64_t native_touch_rows[4][120];
-__attribute__((weak)) uint64_t native_touch_seq;
+__attribute__((weak)) char native_touch_rows[4][120];
+__attribute__((weak)) volatile uint32_t native_touch_seq;
 __attribute__((weak)) uint64_t native_touch_strokes[16][7];
-__attribute__((weak)) uint64_t native_touch_xs[12];
-__attribute__((weak)) uint64_t native_touch_ys[12];
+__attribute__((weak)) volatile int native_touch_xs[12];
+__attribute__((weak)) volatile int native_touch_ys[12];
 __attribute__((weak)) uint64_t native_ufs_root_failure;
 __attribute__((weak)) uint64_t native_wi_log[4][100];
 __attribute__((weak)) uint64_t native_wifi_cfg[32];
@@ -279,6 +282,12 @@ __attribute__((weak)) int (*native_adreno_dram_read32)(uint64_t, uint32_t *) = 0
  * phase=0 error=0, which is exactly what "the module never initialized" also prints. Writing
  * 0xff says "this stub answered, not the module", so the row can never be misread as a real
  * measurement. The struct's first two fields are phase and error, which is all this writes. */
+/* The console module pushes its own one-line status through this, declared weak_import there, so
+ * a board without the row still links. alioth gives it a real implementation that redraws row 42
+ * (package/BootProgress.c:655); our page has no spare row, so the note is dropped and the USB
+ * console carries the same bytes. */
+__attribute__((weak)) void boot_progress_persist(const char *text, unsigned color) { (void)text; (void)color; }
+
 __attribute__((weak)) void qcom_usb_debug_get_status(void *status)
 {
   /* The real function copies 304 bytes; fill the same span so the caller's buffer is fully

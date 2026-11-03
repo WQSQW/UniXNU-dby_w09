@@ -24,7 +24,7 @@ extern int native_ufs_log_sync(void) __attribute__((weak_import));
 extern unsigned native_ufs_store_gpt_check(void) __attribute__((weak_import));
 extern uint32_t cs_text_fixup_parsed __attribute__((weak_import));
 extern uint32_t cs_text_fixup_applied __attribute__((weak_import));
-extern char boot_progress_page_text[48][120] __attribute__((weak_import));
+extern char boot_progress_page_text[49][120] __attribute__((weak_import));
 extern char boot_progress_banner_text[49][120] __attribute__((weak_import));
 extern volatile unsigned boot_progress_banner_rows __attribute__((weak_import));
 extern char boot_progress_ext[8][48] __attribute__((weak_import));
@@ -108,6 +108,7 @@ extern char native_adsp_text[96] __attribute__((weak_import));
 extern volatile int32_t native_battery_stats[16] __attribute__((weak_import));
 extern volatile uint32_t native_swipe_stats[16] __attribute__((weak_import));
 extern volatile int32_t native_touch_extent[4] __attribute__((weak_import));
+extern volatile int native_touch_x_max __attribute__((weak_import)),native_touch_y_max __attribute__((weak_import));
 extern volatile uint32_t native_adreno_method_stats[20][4] __attribute__((weak_import));
 extern volatile uint64_t native_adreno_vm_phase_us[2][8] __attribute__((weak_import));
 extern volatile uint32_t native_adreno_map_fail[7][2] __attribute__((weak_import));
@@ -309,7 +310,7 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
   at = put(out, at, cap, head, sizeof head);
   if (&boot_progress_page_text) {
     at = put(out, at, cap, "[page]", 8);
-    for (unsigned i = 0; i < 48; ++i) if (boot_progress_page_text[i][0]) at = put(out, at, cap, boot_progress_page_text[i], 120);
+    for (unsigned i = 0; i < 49; ++i) if (boot_progress_page_text[i][0]) at = put(out, at, cap, boot_progress_page_text[i], 120);
   }
   if (&boot_progress_banner_text && &boot_progress_banner_rows) {
     unsigned rows = boot_progress_banner_rows; if (rows > 49) rows = 49;
@@ -852,18 +853,23 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
              native_audio_stats[12], native_audio_stats[13]);
     at = put(out, at, cap, row, sizeof row);
   }
-  // Touch strokes in panel pixels as the digitizer published them (y mirrored, 0 = the edge the UI calls top): where each finger came
-  // down and lifted, how long and over how many frames, and the extent of every contact so far (edge gestures need the outer pixels).
+  // Touch strokes as the digitizer published them, in this panel's own pixels: where each finger came down and lifted, how long and
+  // over how many frames, and the extent of every contact so far (edge gestures need the outer pixels). The spans come from the
+  // producer next to the coordinates themselves - on this board the devicetree's thp_input_dev abs_max_x 1600 x abs_max_y 2560
+  // (b01.dts:10101-10102). This row used to divide by ten and call the space 3048x2032, which is the other board's axis pair counted
+  // in 0.1 px; the producer publishes px now, so the quotient made a swipe across the whole panel look like a tenth of one.
   if (&native_touch_stroke_count && &native_touch_strokes && &native_touch_extent && native_touch_stroke_count) {
     char row[160];
     const uint32_t n = native_touch_stroke_count;
-    snprintf(row, sizeof row, "[touch] strokes=%u extent x %d..%d y %d..%d (px of 3048x2032)", n, native_touch_extent[0] / 10,
-             native_touch_extent[1] / 10, native_touch_extent[2] / 10, native_touch_extent[3] / 10);
+    const volatile int *spanX = &native_touch_x_max, *spanY = &native_touch_y_max;
+    snprintf(row, sizeof row, "[touch] strokes=%u extent x %d..%d y %d..%d (px of %ux%u)", n, native_touch_extent[0],
+             native_touch_extent[1], native_touch_extent[2], native_touch_extent[3],
+             spanX ? (unsigned)*spanX : 0u, spanY ? (unsigned)*spanY : 0u);
     at = put(out, at, cap, row, sizeof row);
     for (uint32_t k = n > 16 ? n - 16 : 0; k < n; ++k) {
       const volatile int32_t *r = native_touch_strokes[k & 15];
       snprintf(row, sizeof row, "TS%u t=%u.%03us %ums (%d,%d)->(%d,%d) f%d", k, (uint32_t)r[0] / 1000, (uint32_t)r[0] % 1000, (uint32_t)r[1],
-               r[2] / 10, r[3] / 10, r[4] / 10, r[5] / 10, r[6]);
+               r[2], r[3], r[4], r[5], r[6]);
       at = put(out, at, cap, row, sizeof row);
     }
   }
