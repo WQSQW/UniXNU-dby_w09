@@ -11,6 +11,7 @@ id = "configuration"
 status = "implemented"
 components = []
 paths = ["board.toml", "feeds.toml", "unixnu.lock", "configs/**", ".gitignore", ".gitattributes", "local.toml.example", "porting.toml", "AGENTS.md", "README.md"]
+
 inputs = ["iPadOS 17.7.11 build 21H461 for iPad7,1 (chip_id 0x8011, board_id 12, device_class j120ap).", "Shared hardware description and drivers resolve through [components] plus the two feeds in feeds.toml: the sm8250 SoC feed and the ShengUfs driver replacement.", "One defconfig, configs/dby_w09_defconfig, named by board.toml [kernel] defconfig."]
 configuration = ["board.toml sets schema_version = 2, so the profile layers, dts/, the SoC repository and patch_series are read as format 2.", "[board] kit = dby_w09 maps package/ to kits/dby_w09 in the assembled tree.", "[ipsw] pins the restore URL, identity and two root-image member hashes; [userdata] records the userdata GPT entry; [device_tree] selects dts/dby_w09.dts with the SoC include directory, and scripts/unixnu/devicetree.py generates the ADT.", "feeds.toml pins two sources beyond the base repository: kind = soc sm8250 (FFT-infra/UniXNU-sm8250-common) and kind = driver ShengUfs (FFT-infra/NativeUfs-alioth, the SM8250 stream of the same driver). ./unixnu fetch clones both at their pinned commits and records them, with every Apple reference source and edk2, in unixnu.lock. Machine paths belong to the ignored local.toml or --local-module."]
 procedure = ["Read https://unixnu.com/porting/device-repository and https://unixnu.com/porting/records.", "From the UniXNU checkout run ./unixnu defconfig dby_w09_defconfig -D ../UniXNU-dby_w09, then ./unixnu status --json -D ../UniXNU-dby_w09 and ./unixnu tree -D ../UniXNU-dby_w09.", "Check that every printed module source is the intended one before building."]
@@ -33,7 +34,8 @@ result = "Kernel configuration selected by [kernel] defconfig, including the own
 id = "firmware"
 status = "device-verified"
 components = []
-paths = ["scripts/check-dby_w09.py", "proprietary-files.txt"]
+paths = ["proprietary-files.txt", "scripts/extract-files.py", "scripts/gen-touch-firmware.py"]
+
 inputs = ["Mu-Silicium based UEFI tree exposing Platforms/Huawei/dby_w09Pkg/dby_w09.dsc and Resources/Configs/dby_w09.toml.", "EDK II base packages and the DarwinBoot driver package, resolved from the build tree.", "Stock Huawei boot image: the panel, the three physical keys and USB device mode are already usable at the firmware level."]
 configuration = ["board.toml [firmware] records config = dby_w09, the DSC path, Build/dby_w09Pkg/{target}_CLANGPDB/FV/SILICIUM_UEFI.fd, preflight scripts/check-dby_w09.py and the PACKAGES_PATH list.", "[firmware.defines] sets DEVICE_MODEL = dby_w09, ENABLE_SECUREBOOT = 1, MEMORY_PROTECTION = TRUE and SHIP_MODE = FALSE."]
 procedure = ["Build the firmware in its own tree, then pass the checkout to the payload build with --uefi.", "Boot the tablet into fastboot from that firmware and flash the payload; read the screen state after each attempt."]
@@ -58,7 +60,8 @@ result = "Board preflight checks named by [firmware] preflight"
 id = "cpu"
 status = "device-verified"
 components = ["ArmCpu", "ArmDTPlatform"]
-paths = ["configs/dby_w09_defconfig", "board.toml", "package/ShengPlatformPower.cpp"]
+paths = ["package/CpuFreq*", "scripts/*armcpu*"]
+
 inputs = ["Eight ARM64 cores (SM8250 Kryo 585), GICv3 interrupt controller, PSCI through SMC.", "cpu nodes for all eight cores published by the common converter from the DTS MPIDR reg values.", "AppleARMPlatform and ApplePMGR kept in the prelink roots of board.toml [kernel.prelink]."]
 configuration = ["dts/dby_w09.dts includes the SoC description where /cpus carries the eight MPIDR reg values 0x0 through 0x700 and /psci declares the smc method.", "[payload] kernel_args enables sheng-smp=1, armcpu-diagnostics=1 and armcpu-spi-ipi=1.", "early_security_init points at the unmodified AppleMobileFileIntegrity __TEXT_EXEC address of the donor kernelcache.", "ArmCpu is the shared secondary-core and IPI driver this board selects unchanged, and ArmDTPlatform publishes the platform description it reads from the handoff device tree."]
 procedure = ["Build the kernel and payload, boot the device and read the boot-progress checkpoints for the CPU stage.", "Where the panel is ambiguous, reproduce the same image in the offline QEMU harness and read the diagnostic counters as text."]
@@ -78,7 +81,8 @@ result = "Kernel with SMP boots on hardware; boot-progress and panic text are dr
 id = "memory"
 status = "device-verified"
 components = []
-paths = ["board.toml", "dts/dby_w09.dts", "package/BootProgressCore.h"]
+paths = ["dts/dby_w09.dts", "package/BootProgressCore.h"]
+
 inputs = ["LPDDR5 whose size is a per-unit input rather than a board constant: this model ships with 6 or 8 GiB, and the tested unit has 6 GiB (dram_size 0x180000000 in [payload]).", "DarwinBoot contiguous window selected by [payload.adt] owned_memory_size.", "Persistent Data overlay pages held by the RAM block device."]
 configuration = ["[payload.adt] owned_memory_size = 0x100000000: the value the same-SoC official board uses. Without it DarwinBoot falls back to its 256 MiB window and XNU sees only 256 MiB.", "The ADT generator writes the reserved-memory nodes that the stock bootloader expects, including the splash region."]
 procedure = ["Build the payload, boot and read the memory checkpoints from the panic or diagnostic page.", "Compare the reported free pages against the window size before concluding a memory shortage."]
@@ -98,7 +102,8 @@ result = "Panic page on hardware reports pages=0xf37fe free=0xed5e1, i.e. the 4 
 id = "storage"
 status = "device-verified"
 components = ["ShengUfs", "VirtioMmioBlock", "RamBlock", "SoftwareAES", "AppleKeyStoreState", "VerifiedRoot"]
-paths = ["board.toml", "configs/dby_w09_defconfig", "README.md", "scripts/build-link-stubs.py", "package/BootWatchdogPolicy.c", "package/KeyStoreProbe.cpp"]
+paths = ["README.md", "scripts/build-link-stubs.py", "package/BootWatchdogPolicy.c", "package/KeyStoreProbe.cpp", "scripts/*storage*", "scripts/*root*", "scripts/*userdata*"]
+
 inputs = ["UFS on LUN 0 with 4096-byte logical blocks; this model ships with 128 or 256 GiB and the tested unit has 128 GiB, so the capacity is read from the device instead of assumed.", "Backup GPT read from a full 9008 dump: the userdata entry spans first_lba 0x29B600 to last_lba 0x1D455FF, i.e. 27,959,296 blocks = 114,521,276,416 bytes.", "fastboot in the same session reports the userdata partition size as 0x14651E0000 = 87,595,810,816 bytes, so the two sources disagree and neither number is used to write anything.", "OS and Cryptex1,SystemOS root images, mounted read-only as disk windows.", "A scratch Data volume seed carrying the writable /private/var."]
 configuration = ["[userdata] records the two windows and the LBA range read from the backup; nothing about the geometry is estimated.", "[kernel.prelink] roots keep com.apple.filesystems.apfs and com.apple.iokit.IOStorageFamily, so offline-apfs-load=1 can resolve the identifier it loads.", "[payload.adt] root_match_volume_uuid and packed_data_ramdisk = true describe the delivered form; CONFIG_XNU_OWNER_DATA_VOLUME_UUID in the defconfig must equal the seed's volume UUID.", "The selected components split by role: ShengUfs drives the UFS host on hardware, RamBlock backs the packed Data seed as a block device, VirtioMmioBlock is the root block device of the offline harness, AppleKeyStoreState publishes the key-store events userspace waits for (package/KeyStoreProbe.cpp, sheng-aks=1), VerifiedRoot carries the OS and SystemOS root trust and SoftwareAES is chosen because no Qualcomm crypto engine driver is ported."]
 procedure = ["Build the kernel, then the payload with --data-ramdisk, flash the payload partition and read the Data mount checkpoint.", "For a seed produced by the official fixture workflow, verify the packed form against [payload.adt] packed_data_ramdisk before blaming the driver."]
@@ -124,6 +129,7 @@ id = "display"
 status = "device-verified"
 components = ["GopFramebuffer"]
 paths = ["scripts/build-gop-legacy-display.py", "scripts/patch-xnu-entry-probe.py", "scripts/xnu-panic-screen.c", "package/BootProgressDisplay.h", "package/BootUiTraceProbe.c"]
+
 inputs = ["Firmware GOP framebuffer handed over by the UEFI port.", "Panel mode published through /chosen display-scale.", "Unmodified IOMobileFramebufferLegacy and IOMobileGraphicsFamily from the donor kernelcache."]
 configuration = ["[kernel] archives build the legacy display backend with build-gop-legacy-display.py and force_load it.", "[payload] kernel_args keep the official offline-legacy-* sequence with offline-legacy-unit-scale=1 and offline-legacy-phase=4.", "panic_screen = true patches the panic screen into the payload copy of the kernel.", "GopFramebuffer is the selected shared component that publishes the firmware framebuffer to that backend."]
 procedure = ["Rebuild the payload for an argument change, rebuild the kernel only for a driver change, flash and photograph the panel.", "Read the display checkpoints (stage, client calls, swap validation, frame count) as text from the diagnostic page."]
@@ -146,23 +152,30 @@ result = "Panic and checkpoint text rendered by the panel build"
 
 [[area]]
 id = "input"
-status = "planned"
-components = []
-paths = ["board.toml"]
-inputs = ["Capacitive touch panel and three physical keys (power, volume up, volume down).", "The keys are already usable in firmware; no transport driver runs in XNU."]
-configuration = ["[kernel.prelink] roots already include com.apple.iokit.IOHIDFamily and com.apple.iokit.IOHIDEventDriver, so the OS side of HID is inside the prelink closure.", "[payload] kernel_args reserve offline-hid-input=1, offline-hid-home=1 and offline-key-events=1 for the board producer that is not written yet."]
-procedure = ["Read https://unixnu.com/porting/input completely before writing board code: transport and sensor, publishing reports through the qualified IOHIDDevice ABI, then physical buttons.", "Port the shared HID driver against a qualified prelinked candidate and add a board probe that emits a Home report."]
-findings = ["The kernel currently contains no HID producer, so the lock screen cannot be dismissed: this is the blocker that separates the presented frame from the desktop.", "Publishing reports means subclassing the original IOHIDDevice with its exact 207-slot vtable and 0xd0 instance size; an approximate header changes the instance layout and the failure appears far from its cause.", "Reusing the SM8550 board's SPI and touch-controller sources without checking the SM8250 controller is the obvious trap on this line."]
+status = "device-verified"
+components = ["ShengHidInput", "ShengNovatekTouch", "QcomGeniSpi"]
+paths = ["package/DbyTouch/**", "package/GeniSpi*", "package/HidInputProbe.cpp", "package/IliTddi*", "package/Nvt*", "package/TouchBoard.h", "package/TouchProbe.cpp", "scripts/build-dby-touch.py", "scripts/gen-touch-firmware.py"]
+inputs = ["Capacitive touch panel (Novatek N9Z family over TDDI) and three physical keys (power, volume up, volume down), polled on the SE14 GENI SPI bus.", "The keys are already usable in firmware; the DbyTouch stack reports them in XNU as an HID consumer as well.", "Touch firmware image for this panel, carried verbatim in package/DbyTouch/DbyTouchFw.h."]
+configuration = ["[components] selects ShengHidInput, ShengNovatekTouch and QcomGeniSpi from the catalog; the board producer DbyTouch reaches the kernel through [kernel] archives and scripts/build-dby-touch.py.", "[kernel.prelink] roots already include com.apple.iokit.IOHIDFamily and com.apple.iokit.IOHIDEventDriver, so the OS side of HID is inside the prelink closure.", "[payload] kernel_args carry the stage ladder: dby-touch=8 dby-touch-se=1 sheng-touch-hid=1 sheng-buttons=1, with offline-hid-input=1 offline-hid-home=1 offline-key-events=1 on the consumer side."]
+procedure = ["Read https://unixnu.com/porting/input completely before writing board code: transport and sensor, publishing reports through the qualified IOHIDDevice ABI, then physical buttons.", "Keep the vendor-verified driver sources byte-identical to the accepted implementation, then change one variable per flash and read the stage ladder."]
+findings = ["The stage ladder gates the chip side only: once the SE answers (dby-touch-se=1) stage2 chains to stage5, which reads frames and publishes contacts, so dby-touch=2 already reaches the UI. Reading the number as a feature switch misattributes every later failure.", "Publishing reports means subclassing the original IOHIDDevice with its exact 207-slot vtable and 0xd0 instance size; an approximate header changes the instance layout and the failure appears far from its cause.", "The N9Z command mailbox and the 0x30000 firmware array are board data, not SoC data: taking the SM8550 board's controller sources as-is for this panel is the trap on this line."]
 completion = ["A touch or key event reaches SpringBoard and the lock screen can be dismissed on hardware."]
-limits = ["No touch firmware, no sensor descriptor and no HID event driver is present in this repository yet."]
-next_action = ["Port the shared HID input driver and one button producer, then verify with the input guide's checkpoints."]
-evidence = []
+limits = ["This area records the accepted DbyTouch stack and the catalog consumer; the hand-built producer that preceded it is retired, so its counters no longer describe the shipped path."]
+next_action = ["Use working input as the instrument for the next frontier instead of panel photographs, and re-open this area only if a touch regression appears."]
+
+[[area.evidence]]
+kind = "device"
+reference = "package/DbyTouch/DbyTouch.cpp"
+command = "./unixnu build kernel && ./unixnu build payload -D ../UniXNU-dby_w09 --uefi ../uefi-sheng, then fastboot flash preload <payload.img> and reboot"
+revision = "e61237a2db62a1a35b57d6cdcec8671ec1878265"
+result = "Accepted on the tablet on 2026-11-04: contacts follow the finger, the swipe clears the lock screen and the three keys report. This is the state committed as e61237a."
 
 [[area]]
 id = "gpu"
 status = "planned"
 components = []
-paths = ["board.toml", "configs/dby_w09_defconfig"]
+paths = ["package/*Gpu*", "package/*Adreno*", "package/*Metal*", "scripts/*gpu*", "scripts/*adreno*", "scripts/*metal*"]
+
 inputs = ["Adreno 650 (SM8250). The shared tree's GPU components target Adreno 740, a different generation.", "Signed ZAP firmware and GMU/HFI bring-up inputs, neither of which this board has recorded."]
 configuration = ["The board selects no GPU component; com.apple.iokit.IOGPUFamily is kept in the prelink roots only because the donor closure requires it.", "IOCoreSurfaceRoot has to be published for the display stack to complete, which was done without any GPU hardware."]
 procedure = ["Before porting, confirm an SM8250 GPU path exists upstream or scope the bring-up as its own project; do not adapt an Adreno 740 source line by line."]
@@ -176,7 +189,8 @@ evidence = []
 id = "network"
 status = "planned"
 components = []
-paths = ["board.toml", "configs/dby_w09_defconfig", "package/BootLog.c"]
+paths = ["package/*Wifi*", "package/*Mhi*", "scripts/*wifi*", "scripts/*mhi*", "package/BootLog.c"]
+
 inputs = ["SM8250 Wi-Fi/BT combo plus the modem subsystem, both requiring firmware blobs this port does not carry.", "No serial or USB console is wired in XNU, so device observations come from the panel."]
 configuration = ["No network component is selected; com.apple.iokit.IOSlowAdaptiveClockingFamily and friends are in the prelink roots only as closure dependencies.", "launchd jobs that need the modem or Bluetooth are suppressed by sheng-disable-jobs rather than started and failed."]
 procedure = ["Read the bring-up order first: a console or log path that survives a panic makes every later subsystem cheaper, so the USB debug console is the step before Wi-Fi."]
@@ -190,7 +204,8 @@ evidence = []
 id = "audio"
 status = "planned"
 components = []
-paths = ["board.toml", "configs/dby_w09_defconfig"]
+paths = ["package/*Audio*", "package/*Adsp*", "package/*Gpr*", "scripts/*audio*", "scripts/*adsp*", "scripts/*gpr*"]
+
 inputs = ["SM8250 audio DSP (ADSP), WSADLC/WSA codec path and the audio clock providers.", "Apple audio kexts are in the prelink closure (IOAVFamily, IOAudio2Family, AppleIISController, AppleAudioClockLibs) because the donor roots list requires them."]
 configuration = ["No audio component or boot argument is enabled for this board."]
 procedure = ["Follow the shared guide for the ADSP and audio path before writing board code; the closure presence of the audio kexts is not an implementation."]
@@ -204,7 +219,8 @@ evidence = []
 id = "power"
 status = "host-verified"
 components = []
-paths = ["package/ShengPlatformPower.cpp", "scripts/build-platform-power.py", "board.toml"]
+paths = ["package/ShengPlatformPower.cpp", "scripts/build-platform-power.py"]
+
 inputs = ["ApplePMGR from the donor kernelcache (original __TEXT_EXEC hash 2c433279d004…).", "SM8250 PMGR/regulator contract as reached by the shared board scripts.", "The payload's native-ufs-root gate, which demands exactly one sheng-pmgr=2 and a linked _sheng_pmgr_run."]
 configuration = ["[kernel] archives runs scripts/build-platform-power.py after the driver recipes so the audit reads the original kernelcache from the pinned cache.", "[payload] kernel_args set sheng-pmgr=2."]
 procedure = ["Build the kernel and let the payload build assert the PMGR gate; then boot and read whether AMFI's PMGR dependency holds on hardware.", "Record the contract audit output (extent hashes) with the build, because a mismatch is upstream refusing the input rather than a local error to bypass."]
@@ -224,7 +240,8 @@ result = "Contract audit produces libShengPlatformPower.a and the payload accept
 id = "packaging"
 status = "device-verified"
 components = ["DarwinBoot", "XnuPrelink"]
-paths = ["dts/dby_w09.dts", "package/unixnu.toml", "board.toml", "README.md"]
+paths = ["dts/dby_w09.dts", "package/unixnu.toml", "README.md"]
+
 inputs = ["Prelinked kernel image from the donor kernelcache plus board archives.", "Firmware volume, ADT generated by scripts/make-adt.py from the compiled hardware DTB, trust cache bundle and Data seed.", "Payload FAT volume labelled DBYW09ESP, 208 MiB."]
 configuration = ["[payload] loader = firmware places DarwinBoot inside the firmware volume; title, timeout and kernel_args are written into the ESP unixnu.toml of the image.", "[payload.adt] unique_chip_id = required and --unique-chip-id carry the identity at build time.", "[userdata] describes which IPSW components become root windows inside the assembled image.", "XnuPrelink is the kit stage that assembles the prelinked kernel image the payload then carries."]
 procedure = ["Build the payload, inspect the produced image (menu entry, kernel arguments, ramdisk size) and flash it to the payload partition named in README.md.", "Keep every produced image: rebuilds overwrite the output path, and a checkpoint that cannot be re-flashed cannot be repeated."]
@@ -250,6 +267,7 @@ id = "diagnostics"
 status = "device-verified"
 components = []
 paths = ["package/BootProgress.c", "package/BootProgressCore.h", "package/BootProcessProbe.c", "package/BootUiTraceProbe.c", "package/BootFaultProbe.c", "package/BootWatchdogPolicy.c", "package/LinkStubs.c", "scripts/patch-xnu-entry-probe.py"]
+
 inputs = ["Panel text output (boot-progress=2 checkpoints, panic screen, UI trace page) and, since the 2026-11-05 firmware revert, the CDC-ACM kernel console enumerating as 1209:316d.", "An offline QEMU harness reproducing the same image with counters readable as text.", "Build tags in kernel_args to tell images apart on the panel."]
 configuration = ["[payload] panic_screen = true and kernel_args boot-progress=2, armcpu-diagnostics=1, boot-ui-focus=launchd, boot-ui-focus4=SpringBoard, sheng-build-tag.", "boot-diag-resume controls when the diagnostic page may retake the panel; 3600 keeps it with the OS.", "LinkStubs/BootProgressStubs provide the zero-value definitions for sheng-specific counters that libBootProgress references."]
 procedure = ["For each attempt record the command, the image hash, the last completed checkpoint and the first failing operation.", "Use the offline harness for counter-level questions and the device only for what needs the real panel or the real storage."]
@@ -286,7 +304,8 @@ result = "USB\\VID_1209&PID_316D\\QCOMXNUUSBDEBUG enumerated 74 s after the 2026
 id = "device-tree"
 status = "host-verified"
 components = []
-paths = ["dts/dby_w09.dts", "soc:dts/sm8250.dtsi", "board.toml", "unixnu.lock"]
+paths = ["dts/dby_w09.dts", "soc:dts/sm8250.dtsi", "unixnu.lock"]
+
 inputs = ["Board memory, enabled CPUs and enabled peripherals in the board DTS; controller registers and interrupt geometry in the SoC DTSI.", "[device_tree] source = device:dts/dby_w09.dts with include_dirs = soc:dts, so the dtsi comes from the sm8250 feed pinned in feeds.toml and recorded in unixnu.lock, not from a sibling checkout.", "OS profile property tables and the payload handoff switches in board.toml [payload.adt]."]
 configuration = ["dtc compiles the two sources into device-tree/hardware.dtb and scripts/unixnu/devicetree.py encodes kernel.macho.adt; the hand-written format 1 generator is retired.", "The memory node needs two size cells because the root declares #size-cells = <2>: the tested unit's 6 GiB is reg = <0 0x80000000 1 0x80000000>."]
 procedure = ["The build compiles the DTS itself with the include directory resolved from [device_tree] include_dirs = soc:dts; the manual equivalent is dtc -I dts -O dtb -i <sm8250 feed checkout>/dts -o /tmp/dby_w09.dtb dts/dby_w09.dts, and the checkout is the one ./unixnu fetch creates for the pinned commit.", "The core's scripts/make-adt.py converts that DTB with --os-profile profiles/os/ipados-17.7.11-21H461/profile.toml --board board.toml --unique-chip-id HEX --data-ramdisk --trust-cache into kernel.macho.adt; devicetree.py and make-adt.py both live in the core checkout, not in this repository.", "Decode both the generated and the hardware-proven ADT and diff them node by node; random-seed and boot-manifest-hash are excluded because the generator writes a fresh seed each run."]
