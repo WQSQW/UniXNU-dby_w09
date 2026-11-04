@@ -94,10 +94,15 @@ CONFIG_XNU_NATIVE_VIRTIO_BLOCK_ARCHIVE="{tree}/build/virtio-mmio-block-verified-
 # :808-810 用 -Wl,-force_load 链 build/boot-progress/libBootProgress.a；:844 把它做成全局
 # -DXNU_BOOT_PROGRESS=1（代价：全树重编）。同时这也是屏幕上有阶段带/pulse 条的开关。
 CONFIG_XNU_BOOT_PROGRESS=y
-# USB CDC-ACM 调试控制台（QcomXnuUsbDebug）没有接入这条链：board.toml 的 kernel_args
-# 注释记录了 2026-11-01 摘除的原因（write 轮询 DWC3 一直不枚举）。补丁与源码留在工作区，
-# 不参与本基线。
-# CONFIG_XNU_QCOM_USB_DEBUG is not set
+# USB CDC-ACM 调试控制台（QcomXnuUsbDebug）。2026-11-05 按 port-sm8250.md §7 接入这条链。
+# 开关本身走官方通道：CONFIG_XNU_* 由 scripts/unixnu/kernel.py:xnu_env 变成 XNU_* 环境变量，
+# 设备层的 build-xnu-4k-baseline.sh 读 XNU_QCOM_USB_DEBUG，只给补丁改的那六个单元加
+# -DXNU_QCOM_USB_DEBUG=1（per-object _CFLAGS_ADD），不碰全局 EXTRA_CFLAGS。
+# 2026-11-01 摘除的理由仍然成立并仍然要防：qcom_usb_debug_write() 会轮询 DWC3，控制台不枚举时
+# 每个 tee 出去的 printf/kprintf/IOLog 都在轮询一个不应答的控制器。当时的实测是 GCTL 交回来就是
+# HOST 模式（0x00101005，PRTCAPDIR=2 是 DEVICE），模块的门因此报 CORE_NOT_DEVICE。本轮改的是
+# 「接线」：接线之后这道门会不会被 dwc3_init() 的角色接管越过，是同一次刷写要回答的问题。
+CONFIG_XNU_QCOM_USB_DEBUG=y
 # 前置依赖已经补齐（VERIFIED_ROOT_PROBE + OWNER_ROOT_AUDIT + NATIVE_VIRTIO_BLOCK +
 # SOURCE_CORECRYPTO14 全为 1，build-xnu-4k-baseline.sh:88-92 的门现在能过）。
 # 这里仍关着只剩一个理由：BOOT_PROGRESS 走全局 EXTRA_CFLAGS（脚本 line 844），

@@ -1,0 +1,13 @@
+# QcomXnuUsbDebug 自带的两个 XNU 补丁（模块源在 package/QcomXnuUsbDebug/patches/darwin23/，
+# 这里放的是同一份内容的设备层副本，因为 plan() 与 prepare() 只认下面这三种写法）。
+#
+# board.toml 把这条 series 排在 os: 之后，是 port-sm8250.md §7.3 的硬要求：「Apply both patches
+# to the build tree after zzz-boot-progress.patch」——两个补丁在 PE_init_kprintf 里动的行紧挨着
+# boot-progress 插的行，后者的行要当上下文。scripts/unixnu/patches.py:prepare 按 plan() 解析出的
+# 顺序逐个 git apply，所以顺序只能由 patch_series 的排列来表达。
+#
+# 为什么用裸文件名而不是 integration.md §3 的 scripts/xnu_patches.py apply：prepare() 每次签名变化
+# 都 rmtree + 重新 clone + 重新 apply（patches.py:prepare），手工 apply 的结果活不过下一次构建；
+# 补丁文件必须待在构建树之外的稳定路径上，也就是设备仓的 patches/xnu/。
+qud-darwin23-console.patch
+qud-darwin23-worker.patch

@@ -9,11 +9,17 @@ This is the dby_w09 analogue of sheng's check-sheng.py, trimmed to what the
 bring-up stage 2 -> 3 actually needs (no DTB/stock-firmware cross-check yet).
 """
 import json
+import os
 import re
 from pathlib import Path
 import tomllib
 
-PLATFORM = Path('uefi-dby_w09/Platforms/Huawei/dby_w09Pkg')
+# core runs this with cwd = the device tree and passes the firmware checkout in
+# $UNIXNU_UEFI (cli.py:74); 'uefi-dby_w09' is the same checkout installed under its
+# repository name next to the tree.
+uefi_root = Path(os.environ.get('UNIXNU_UEFI') or 'uefi-dby_w09')
+PLATFORM = uefi_root / 'Platforms/Huawei/dby_w09Pkg'
+CONFIG = uefi_root / 'Resources/Configs/dby_w09.toml'
 DTB = Path('build/dby_w09/dby_w09.dtb')
 
 
@@ -22,8 +28,8 @@ def rows_from_memory_map(source: Path):
     text = source.read_text()
     return [(m[1], int(m[2], 16), int(m[3], 16), m[4])
             for m in re.finditer(
-                r'\{"([^"]+)"\s*,\s*(0x[0-9a-fA-F]+),\s*(0x[0-9a-fA-F]+),'
-                r'([A-Za-z_]+)', text)]
+                r'\{"([^"]+)"\s*,\s*(0x[0-9a-fA-F]+)\s*,\s*(0x[0-9a-fA-F]+)\s*,'
+                r'\s*([A-Za-z_]+)', text)]
 
 
 if __name__ == '__main__':
@@ -39,16 +45,23 @@ if __name__ == '__main__':
     if not rows or len(rows) > 128:
         errors.append('Empty memory map or descriptor capacity exceeded')
 
-    # Alignment / overlap checks
-    for index, (name, base, size, _) in enumerate(rows):
+    # Alignment / overlap checks. Only rows at or above PcdSystemMemoryBase are compared:
+    # Silicon/Silicium/SiliciumPkg/Library/MemoryInitPeiLib/MemoryInitPei.c skips register
+    # regions before its EndAddress test, so flagging one would reject a table the tablet
+    # already boots with.
+    dsc_text = (PLATFORM / 'dby_w09.dsc').read_text() if (PLATFORM / 'dby_w09.dsc').is_file() else ''
+    system_base = re.search(r'PcdSystemMemoryBase\|(0x[0-9a-fA-F]+)', dsc_text)
+    ram_floor = int(system_base.group(1), 16) if system_base else 0
+    checked = [(name, base, size) for name, base, size, _ in rows if base >= ram_floor]
+    for index, (name, base, size) in enumerate(checked):
         if base % 4096 or size % 4096 or not size:
             errors.append(f'Invalid UEFI page alignment: {name}')
-        for other, other_base, other_size, _ in rows[index + 1:]:
+        for other, other_base, other_size in checked[index + 1:]:
             if max(base, other_base) < min(base + size, other_base + other_size):
                 errors.append(f'Overlapping intervals: {name}, {other}')
 
     # UEFI FD descriptor vs dby_w09.toml [uefi_fd]
-    config_path = Path('uefi-dby_w09/Resources/Configs/dby_w09.toml')
+    config_path = CONFIG
     if config_path.is_file():
         config = tomllib.loads(config_path.read_text())
         fd = config.get('uefi_fd', {})
@@ -74,7 +87,7 @@ if __name__ == '__main__':
     if inc_dir.is_dir():
         for inc in inc_dir.glob('*.inc'):
             dependencies.update(re.findall(r'Binaries/dby_w09/[^\s}]+', inc.read_text()))
-    missing = sorted(p for p in dependencies if not (Path('uefi-dby_w09') / p).is_file())
+    missing = sorted(p for p in dependencies if not (uefi_root / p).is_file())
 
     result = {
         'descriptors': len(rows),

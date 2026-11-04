@@ -21,8 +21,8 @@ kit = "dby_w09"                # 本仓 package/ 在构建树里出现为 kits/d
 
 # 目录规范 ID（components.toml）。Adreno740/AdrenoMetal 不在这里：SM8250 的 A650
 # 没有任何目录组件覆盖（soc:configs/sm8250.config 明写 # CONFIG_XNU_NATIVE_ADRENO is not set），
-# 是未移植项，不是省略。ShengHidInput/ShengNovatekTouch/QcomGeniSpi 也还没接（输入是
-# porting.toml 里记录的下一个卡点）。QcomXnuUsbDebug 先在本地分支验证，不进这条链。
+# 是未移植项，不是省略。ShengHidInput/ShengNovatekTouch/QcomGeniSpi 已经在
+# porting.toml 的 input area 里记为 device-verified（真机触摸与按键可用）。QcomXnuUsbDebug 不在这里，但并不是没接：core 的 components.toml 里还没有这条 spec，而 components.toml 只从 core 软链，设备仓不能添加组件规格。它的归档走 [kernel] archives 的脚本位（scripts/build-qcom-usb-debug.py），模块放在本仓 package/ 里 （构建树里的 kits/dby_w09/QcomXnuUsbDebug，和 DbyTouch 同一层：components.py:resolve 只保留 refer/patch/package/script 加目录选中的组件，设备仓 drivers/ 下没有目录规格的模块会被丢掉），补丁走 [kernel] patch_series 的第五条 device:patches/xnu/series-usb。
 [components]
 include = ["ArmDTPlatform", "ArmCpu", "SoftwareAES", "ShengUfs", "VirtioMmioBlock", "RamBlock", "GopFramebuffer", "XnuPrelink", "DarwinBoot", "AppleKeyStoreState", "VerifiedRoot", "ShengHidInput", "ShengNovatekTouch", "QcomGeniSpi"]
 
@@ -67,7 +67,10 @@ windows = [
 [kernel]
 defconfig = "dby_w09_defconfig"
 config_fragments = ["arch:configs/common.config", "soc:configs/sm8250.config", "os:configs/ipados.config"]
-patch_series = ["arch:patches/xnu/series", "soc:patches/xnu/series", "device:patches/xnu/series", "os:patches/xnu/series"]
+patch_series = ["arch:patches/xnu/series", "soc:patches/xnu/series", "device:patches/xnu/series", "os:patches/xnu/series",
+  # QcomXnuUsbDebug 的两个补丁必须排在 os: 之后：port-sm8250.md §7.3 明写它们在 zzz-boot-progress.patch 之后 apply（PE_init_kprintf 的 hunk 拿
+  # boot-progress 插的行当上下文）。patch_series 是数组覆盖，所以这里要重复上面四项。
+  "device:patches/xnu/series-usb"]
 archives = [
   # arch:configs/common.config 打开 SOURCE_CORECRYPTO14 / SOURCE_PTHREAD，
   # 这两个归档只有这两步会产。
@@ -141,6 +144,10 @@ archives = [
   # dby_touch_probe_entry() 是强引用，链接器按未定义符号一定会把它拉进来。
   "build-dby-touch.py",
   "build-gop-legacy-display.py",
+  # CDC-ACM 控制台归档：官方入口是组件目录 spec（components.toml:513-534）调模块自己的
+  # scripts/build.py，本 core 没有这条 spec 且 components.toml 只从 core 软链（tree.py:assemble），
+  # 所以同一条命令放在设备层脚本位。它读 bootstrap pass 留下的 pe_kprintf.o.json。
+  "build-qcom-usb-debug.py",
 ]
 
 # ---------------------------------------------------------------------------
@@ -324,6 +331,13 @@ kernel_args = [
   "boot-diag-resume=3600",
   "armcpu-spi-ipi=1",
   "-no_slto_panic",
+  # port-sm8250.md §7.7：qcom-usb-debug=1 单独加、加在最后，一次刷写只回答一个问题。
+  # 这是 QcomXnuUsbDebug 唯一的启用开关（kernel/QcomXnuUsbDebug.c 读它）；不加它归档虽然
+  # force_load 进来，六个单元的补丁调用点全部保持关闭。qcom-usb-ctl=1（Mac 反向控制）这次
+  # 不加：971 + len(" qcom-usb-debug=1") = 988，再加 ctl 是 1003，越过 DarwinBoot 的 1000 字节门
+  # （payload.py:35）。主机侧证据是枚举 1209:316d serial=QcomXnuUsbDebug；拒绝也会由
+  # boot-progress 把同一行画在面板上（§8），所以一次刷写两边都能读。
+  "qcom-usb-debug=1",
 ]
 
 # ---------------------------------------------------------------------------
