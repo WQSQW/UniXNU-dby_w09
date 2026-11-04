@@ -250,13 +250,17 @@ id = "diagnostics"
 status = "device-verified"
 components = []
 paths = ["package/BootProgress.c", "package/BootProgressCore.h", "package/BootProcessProbe.c", "package/BootUiTraceProbe.c", "package/BootFaultProbe.c", "package/BootWatchdogPolicy.c", "package/LinkStubs.c", "scripts/patch-xnu-entry-probe.py"]
-inputs = ["Panel text output as the only device-visible log; boot-progress=2 checkpoints, panic screen and UI trace page.", "An offline QEMU harness reproducing the same image with counters readable as text.", "Build tags in kernel_args to tell images apart on the panel."]
+inputs = ["Panel text output (boot-progress=2 checkpoints, panic screen, UI trace page) and, since the 2026-11-05 firmware revert, the CDC-ACM kernel console enumerating as 1209:316d.", "An offline QEMU harness reproducing the same image with counters readable as text.", "Build tags in kernel_args to tell images apart on the panel."]
 configuration = ["[payload] panic_screen = true and kernel_args boot-progress=2, armcpu-diagnostics=1, boot-ui-focus=launchd, boot-ui-focus4=SpringBoard, sheng-build-tag.", "boot-diag-resume controls when the diagnostic page may retake the panel; 3600 keeps it with the OS.", "LinkStubs/BootProgressStubs provide the zero-value definitions for sheng-specific counters that libBootProgress references."]
 procedure = ["For each attempt record the command, the image hash, the last completed checkpoint and the first failing operation.", "Use the offline harness for counter-level questions and the device only for what needs the real panel or the real storage."]
-findings = ["The panel is the instrument: without a console, the panic text plus checkpoint numbers are the only evidence, so a build tag per image is not decoration but the way to correlate a photograph with a build.", "Counters beat wall-clock judgement. In the offline harness the guest clock advances while TCG work rate stays roughly ten times slower than the official hypervisor, so elapsed time never proves progress or regression.", "The current limits are visible in this area: the offline harness reads counters, but the panel still needs a camera photograph, and a USB console is the change that removes that bottleneck.", "Diagnostic polish must not outrank the next root cause; the fastest useful step has repeatedly been one static query that enumerates the answer instead of another flash-and-read cycle."]
+findings = ["The panel is the instrument: without a console, the panic text plus checkpoint numbers are the only evidence, so a build tag per image is not decoration but the way to correlate a photograph with a build.", "Counters beat wall-clock judgement. In the offline harness the guest clock advances while TCG work rate stays roughly ten times slower than the official hypervisor, so elapsed time never proves progress or regression.", "The current limits are visible in this area: the offline harness reads counters, but the panel still needs a camera photograph, and a USB console is the change that removes that bottleneck.", "Diagnostic polish must not outrank the next root cause; the fastest useful step has repeatedly been one static query that enumerates the answer instead of another flash-and-read cycle.",
+          "The console's blocker was firmware-side, not in XNU: the board shipped a byte-patched UsbConfigDxe (two cbz w10 -> b plus one table entry) that forced the DWC3 HOST init path, so QcomXnuUsbDebug failed at its CORE_NOT_DEVICE gate and 1209:316d never appeared. Reverting to the vendor binary (md5 6340bc7e..., named directly by the INF) enumerated it 74 s into the boot and bound COM4.",
+          "A binary patch of a vendor .efi can therefore remove a capability while appearing to add one; check which blob the INF names before believing any note about what reached the FV."]
 completion = ["Every claimed milestone has a reproducible command, a matching source revision and an accessible result."]
-limits = ["No serial or USB console in XNU yet; UI-trace and process probes are board-local adaptations of shared sources."]
-next_action = ["Port the shared SM8250 USB debug console so device checkpoints stop depending on photographs."]
+limits = ["The console only carries kernel text while the firmware hands DWC3 over in DEVICE role, so a firmware-side role change can silence it again without any XNU fault.",
+          "UI-trace and process probes are board-local adaptations of shared sources."]
+next_action = ["Read a cold-boot log over the enumerated console (COM4) and move counter-level questions off panel photographs.",
+               "Before re-enabling the CDC-ACM tee permanently, settle the 2026-11-01 hazard: qcom_usb_debug_write() polls DWC3 and once the cable leaves there is no owner to find."]
 
 [[area.evidence]]
 kind = "device"
@@ -271,6 +275,13 @@ reference = "scripts/patch-xnu-entry-probe.py"
 command = "./unixnu build kernel -j 2 -D ../UniXNU-dby_w09 --uefi ../uefi-sheng"
 revision = "d8b80295118ef25ac3a784134bcf95cd8e88109f"
 result = "Entry-probe and display counters are readable from the offline harness used to decide the display fixes"
+[[area.evidence]]
+kind = "device"
+reference = "board.toml"
+command = "fastboot flash boot <boot_dby_w09_uefi.img built from the vendor UsbConfigDxe> && reboot, then watch Windows for VID_1209&PID_316D"
+revision = "e61237a2db62a1a35b57d6cdcec8671ec1878265"
+result = "USB\\VID_1209&PID_316D\\QCOMXNUUSBDEBUG enumerated 74 s after the 2026-11-05 flash and bound as COM4; the same watcher on the previous build saw zero hits over 240 s"
+
 [[area]]
 id = "device-tree"
 status = "host-verified"
