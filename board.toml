@@ -325,10 +325,10 @@ kernel_args = [
   "sheng-disable-watchdogd=1",
   "sheng-disable-jobs=com.apple.identityservicesd,com.apple.locationd,com.apple.CommCenter,com.apple.bluetoothd",
   "armcpu-diagnostics=1",
-  # boot-diag-resume=3600：面板要交给系统。取 10 时，只要 UI 连续 10 秒没扫出新内容诊断页就抢回去，
-  # 而这对手屏（Always-On）是正常的，于是平板在系统画面和我们那页之间来回。3600 是
-  # BootProgress.c:535 接受的最大值。
-  "boot-diag-resume=3600",
+  # boot-diag-resume dropped 2026-11-05: with the live banner off by default the panel is never
+  # painted after the hand-off, so there is nothing left to take back. The argument being absent
+  # means resume_after=0 (BootProgress.c:551 clamps <5 to 0) = never reclaim the panel. Its 22
+  # bytes become the reserve for qcom-usb-ctl=1 (15 bytes), which would not otherwise fit.
   "armcpu-spi-ipi=1",
   "-no_slto_panic",
   # port-sm8250.md §7.7：qcom-usb-debug=1 单独加、加在最后，一次刷写只回答一个问题。

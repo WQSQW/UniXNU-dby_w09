@@ -1019,10 +1019,13 @@ static void crash_banner(unsigned now) {
 }
 static void touch_overlay_locked(void);
 static void touch_overlay(void) {
-  // sheng-banner=0 switches every on-screen diagnostic painting off once the system owns the display (the UFS log carries the same rows):
-  // the painters hold render_busy for about a million uncached stores, which a swap's scanout hand-off has to wait for.
+  // The live banner writes our rows into the OS's own scanout, anchored to the panel's bottom edge and growing upwards, so it
+  // covers whatever the lock screen puts there. Since 769d8ef the record reaches the host by itself: the QcomXnuUsbDebug CDC
+  // console carries the kernel's output, and BootLog.c writes the same rows to the UFS log. So the panel is left alone by
+  // default. The painters also hold render_busy for about a million uncached stores, which a scanout hand-off waits for.
+  // sheng-banner=1 opts the painting back in for a run with no cable attached.
   static int banner_off=-1;
-  if(banner_off<0){unsigned v=1;PE_parse_boot_argn("sheng-banner",&v,sizeof(v));banner_off=v==0;}
+  if(banner_off<0){unsigned v=0;PE_parse_boot_argn("sheng-banner",&v,sizeof(v));banner_off=v==0;}
   if(banner_off)return;
   __atomic_fetch_add(&touch_passes,1,__ATOMIC_RELAXED);
   // Same rule as the text renderer: draw only while holding render_busy, so a display handoff (which takes it before
