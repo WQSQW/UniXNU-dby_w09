@@ -104,7 +104,8 @@ the firmware tree instead (see Deviations).
 
 ## Status
 
-Measured on hardware, October 2026 (payload `461538fa…`, kernel `de197e0d…`). See
+Measured on hardware, 2026-11-05 (payload `09c3aad6…`, prelinked kernel candidate
+`a6382e52…`, firmware tree `WQSQW/uefi-dby_w09@423e222`). See
 `porting.toml` for the per-area record and evidence.
 
 | Area | State |
@@ -113,33 +114,36 @@ Measured on hardware, October 2026 (payload `461538fa…`, kernel `de197e0d…`)
 | Kernel boot to launchd | reaches user space; original iPadOS binaries exec against the unmodified AMFI |
 | Root and data volumes | native UFS root, OS and SystemOS windows mounted, packed Data seed with a persistent overlay |
 | Display | XNU presents scanout: the iPadOS lock screen is on the panel |
-| Input | no XNU HID device yet, so the lock screen cannot be passed |
+| Input | `DbyTouch` (accepted from a stack verified on this same panel model) reports points on the lock screen; the Home and volume keys reach XNU |
 | GPU | not ported; the current frames are CPU-rendered scanout |
 | Audio, network, camera | not started |
 
-## Known firmware message
+## Firmware boot message
 
-Before UniXNU starts, the panel shows `Error: Image at … start failed: Not Found` together with
-`No handles survived filtering!` and `USB boot desired, but no USB devices found on first attempt`.
-That is Mu's `MsBootPolicy.efi`: it is a BDS boot option (its module type is
-`UefiApplicationEntryPoint`) whose entry point returns the boot-policy status, and Silicium's
-`MsBootPolicyLibGetBootSequence` returns `EFI_UNSUPPORTED`, so Mu falls back to the hardcoded
-HDD → USB → PXE scan, finds no USB disk and returns `EFI_NOT_FOUND`, which BdsDxe then reports.
-It costs one 6-second retry and is unrelated to UniXNU; implementing that one library hook is the
-only way to silence it.
+Earlier builds printed `Error: Image at … start failed: Not Found` before UniXNU started.
+That was Mu's `MsBootPolicy.efi`: a BDS boot option (`UefiApplicationEntryPoint`) whose entry
+point returns the boot-policy status, because Silicium's `MsBootPolicyLibGetBootSequence`
+returns `EFI_UNSUPPORTED`, so Mu falls back to the hardcoded HDD → USB → PXE scan and reports
+`EFI_NOT_FOUND`. It is a boot-option retry, not a UniXNU failure. Wiring `UniXNUDxe` so the
+platform BDS loads `UniXNU.efi` from the firmware volume by GUID (`4e07b0b`), keeping only the
+official silent `SecurityLockAuditLib` instance (`bfe74bc`) and pinning `PcdDebugPrintErrorLevel`
+to the errors-only value (`042a4e4`) took it off the boot path; the panel now shows the boot
+menu without a log band over it (`423e222`).
 
 ## Deviations
 
 Recorded so that a reviewer knows what is not yet publishable, rather than discovering it:
 
-- **The `sm8250` feed pin is not yet traceable.** `feeds.toml` pins
-  `FFT-infra/UniXNU-sm8250-common@6bb9b025…`, but the local copy's content does not match the
-  revision recorded when that repository was last fetched (`26fd784e…`) and is missing its
-  `LICENSE` and `kits/`. Until the board's SoC changes are committed on top of an upstream clone
-  and the pin re-recorded, `unixnu fetch` cannot reproduce the SoC feed. The `ShengUfs` pin is
-  clean: its local copy is byte-identical to the fetch at `ab540590…`.
-- `unixnu build firmware` is not wired: the firmware tree is an offline Mu-Silicium derivative
-  installed by its own script, so `[firmware]` records the intended paths and the build runs by hand.
+- **The firmware FD is not byte-reproducible, and that is not a defect of this port.** The
+  firmware embeds `__TIME__` and lld writes a fresh random CodeView GUID into every PDB
+  reference, so no FD hash can be pinned. The equivalent proof was run per FFS: building
+  `423e222` through `unixnu build firmware` and comparing the volume against the FD extracted
+  from the flashed `boot` partition gives 106 of 107 FFS entries byte-identical, the outlier
+  being `PcdDx_.ffs`, 8 bytes of PDB GUID after the `RSDS` signature.
+- The Mu workflow `.github/workflows/active_devices.yml` inherited from the firmware upstream
+  still builds all platforms and fails here; it is not this board's entry point. The board
+  entry is `./unixnu build firmware --uefi <uefi checkout> --edk2 <fetched mu_basecore>
+  -D ../UniXNU-dby_w09 --jobs 4` with `scripts/check-dby_w09.py` as preflight.
 - Storage ABI bindings are consumed from a recorded static table
   (`scripts/build-storage-bindings.py`); the live audit that would regenerate it on this board is
   not yet wired.

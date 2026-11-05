@@ -33,7 +33,9 @@ OUT = ROOT / 'build/boot-progress'
 OUT.mkdir(parents=True, exist_ok=True)
 uefi = Path(os.path.expanduser(os.environ.get('UNIXNU_UEFI') or str(ROOT.parent / 'uefi-sheng')))
 fb_lib = uefi / 'Silicon/Silicium/SiliciumPkg/Library/FrameBufferSerialPortLib'
-extra_includes = ['-I', str(fb_lib)] if fb_lib.is_dir() else []
+if not fb_lib.is_dir():
+    raise SystemExit(f'{fb_lib} missing: --uefi (or UNIXNU_UEFI) must be a Mu-Silicium checkout. The panic-screen glyph table in Font.h is a build input of this kernel step, so pass the checkout root, not a partial copy.')
+extra_includes = ['-I', str(fb_lib)]
 record = json.loads((ROOT / 'build/xnu/ios-obj/DEVELOPMENT_ARM64_BCM2837/osfmk/DEVELOPMENT/startup.o.json').read_text().strip().rstrip(','))
 source = ROOT / 'kits/dby_w09/BootProgress.c'
 obj = OUT / 'BootProgress.o'
