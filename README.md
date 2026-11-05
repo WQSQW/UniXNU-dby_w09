@@ -1,4 +1,4 @@
-# UniXNU on the Huawei MatePad 11 (dby_w09)
+# UniXNU on the Huawei MatePad 11 (dby-w09)
 
 Device repository for the **DBY-W09** (Huawei MatePad 11, Qualcomm SM8250 / kona). It carries
 the board description, the board device tree and XNU patch order, the kernel defconfig, the board
@@ -77,7 +77,7 @@ cd UniXNU
 
 Two things about that sequence are load-bearing:
 
-- **`defconfig` is not optional.** The kernel build reads only `out/dby_w09/.config`, so editing
+- **`defconfig` is not optional.** The kernel build reads only `out/dby-w09/.config`, so editing
   `configs/dby_w09_defconfig` has no effect until `defconfig` regenerates it. A defconfig-only
   change looks like it built and then fails at runtime.
 - **`build kernel` runs twice.** `scripts/build-platform-power.py` links a no-op `sheng_pmgr_run`

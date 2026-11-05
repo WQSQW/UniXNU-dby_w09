@@ -12,7 +12,7 @@
 schema_version = 2
 
 [board]
-name = "dby_w09"
+name = "dby-w09"            # catalog slug: sync-devices.py SLUG = [a-z0-9][a-z0-9-]* rejects "_"
 soc = "SM8250"
 soc_source = "sm8250"          # feeds.toml 里 kind = "soc" 的那条钉选
 os_profile = "ipados-17.7.11-21H461"
