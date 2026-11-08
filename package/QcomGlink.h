@@ -73,6 +73,11 @@ typedef struct {
     /* Counters for the log. */
     uint32_t rx_messages, tx_messages, rx_data, unknown_opens, dropped;
     uint32_t unmatched;         /* messages whose channel id matched nothing we have */
+    /* One count per inbound command id. A link that only ever carried INTENT and RX_DONE is a different answer from one that
+     * carried nothing at all, and the boot that shows sent=0 has to be able to say which of the two it is. */
+    uint32_t cmd_hist[16];
+    uint32_t rx_first[4];       /* the first 16 bytes of the first whole message the link delivered, before any parsing */
+    uint32_t rx_first_bytes;    /* how long that message was; zero until one arrives */
     uint16_t last_unmatched_cid;
     uint8_t last_unmatched_cmd;
     char last_unknown[QCOM_GLINK_NAME];

@@ -74,12 +74,15 @@ int apr_decode(const uint8_t *in, uint32_t length, AprMessage *m)
 {
     if (length < APR_HEADER_BYTES) return AprShort;
     const uint16_t field = le16(in);
-    m->msg_type = (uint8_t)(field >> 8);
+    m->msg_type = (uint8_t)((field >> 8) & 0x3u);            /* apr.h:14-23, message type is bits 8:9; bits 10:15 are reserved */
     m->header_bytes = ((field >> 4) & 0xfu) * 4u;
     m->size = le16(in + 2);
-    if ((field & 0xfu) != APR_PKT_VER) return AprBadVersion;
-    /* apr.c:634-647 rejects a packet smaller than the fixed header and smaller than its own header. */
-    if (m->header_bytes < APR_HEADER_BYTES || m->size < APR_HEADER_BYTES || m->size < m->header_bytes) return AprBadHeader;
+    /* The vendor's receive path (apr.c:613-640) refuses a version only above APR_PKT_VER + 1: the ADSP answers in the version it
+     * speaks, and one of the two it may answer with was being thrown away here. The rest of its checks are kept as separate codes so
+     * the boot log says which of them stopped a message, instead of leaving an answer and a silence looking the same. */
+    if ((field & 0xfu) > APR_PKT_VER + 1u) return AprBadVersion;
+    if (m->header_bytes < APR_HEADER_BYTES) return AprBadHeader;                /* the same file's "Wrong hdr size" */
+    if (m->size < APR_HEADER_BYTES || m->size < m->header_bytes) return AprBadSize;  /* "Wrong paket size", "Packet size less than header" */
     if (m->size > length) return AprBadSize;         /* never read past what the channel actually delivered */
     m->src_svc = in[4]; m->src_domain = in[5]; m->src_port = le16(in + 6);
     m->dest_svc = in[8]; m->dest_domain = in[9]; m->dest_port = le16(in + 10);
@@ -350,7 +353,11 @@ uint32_t apr_asm_media_format(uint8_t *out, uint32_t capacity, uint32_t token, u
     w_init(&w, out + APR_HEADER_BYTES, capacity - APR_HEADER_BYTES);
     if (w32(&w, ASM_FMT_BLOCK_BYTES)) return 0;                              /* fmt_blk_size */
     if (w16(&w, f->num_channels) || w16(&w, f->bits_per_sample) || w32(&w, f->sample_rate)) return 0;
+    /* is_signed is hardcoded to 1 (q6asm.c:7048), then the word size, endianness and mode the platform driver passes
+     * (:7049-7052 from msm-pcm-q6-v2.c:449-451); for S16_LE that word size is 16 (msm-pcm-q6-v2.c:375-377). */
     if (w16(&w, 1) || w16(&w, f->sample_word_size) || w16(&w, ASM_LITTLE_ENDIAN) || w16(&w, f->mode)) return 0;
+    /* use_default_chmap is true unless a custom map was installed, and q6asm_map_channels then writes what
+     * apr_pcm_channel_map writes above: the two tables agree for every count up to eight. */
     if (w_bytes(&w, map, PCM_MAX_CHANNELS)) return 0;
     return finish(out, &w, AprSvcAsm, (uint16_t)((uint16_t)session << 8 | stream_id), token, APR_OP_ASM_MEDIA_FMT_V2);
 }
@@ -491,7 +498,10 @@ int apr_pending_reply(AprPending *p, const AprMessage *m, uint32_t *request_opco
     p->last_opcode = m->opcode;
     if (request_opcode) *request_opcode = request;
     if (basic) {
-        p->errors++;
+        /* q6afe.c:1080-1097 takes the second payload word as the error status and calls the command failed only when
+         * it is not zero ("payload[1] contains the error status for response", `if (payload[1] != 0)`). A zero is the
+         * DSP saying yes, so it belongs with the answers. */
+        if (rstatus) p->errors++; else p->answers++;
         p->last_status = rstatus;
         if (status) *status = rstatus;
         return AprPResult;

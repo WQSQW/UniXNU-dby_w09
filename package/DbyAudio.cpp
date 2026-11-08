@@ -11,8 +11,11 @@
 // substitution is the documented next step of its own header, not a new design. ShengApr.c encodes and decodes; this file only owns the
 // channel, the timers and the order.
 //
-// dby-apr levels: 1 channel + AVCS handshake, 2 + TDM pad mux, AFE clock/config/start and the ADM route, 3 + one mapped PCM stream that
-// plays a tone (the audible proof that the whole path carries samples).
+// dby-apr levels: 1 channel + AVCS handshake, 2 + TDM pad mux and the AFE clock/config/start of the backend, 3 + the vendor's prepare
+// block (memory map, ASM open, ADM device open and route, media format) and the PCM stream that plays a tone (the audible proof that
+// the whole path carries samples). The prepare block is one level because it is one call upstream: msm-pcm-q6-v2.c runs the memory
+// map (hw_params:1176), the ASM open (:396), the ADM route (:426) and the media format (:445) front to back, and the route names the
+// ASM session, so the half without the session would be a command this board's driver never sends.
 #include <IOKit/IOLib.h>
 #include <IOKit/IOService.h>
 #include <IOKit/IOWorkLoop.h>
@@ -70,6 +73,14 @@ extern "C" {volatile int32_t native_audio_stats[16];}
 // (one bit per client) | version agreed << 14 | link broken << 15, [12] opens nobody serves.
 extern "C" {extern volatile int32_t native_adsp_stats[16];}
 extern "C" {extern volatile int32_t native_adsp_audio[14];}
+// The link behind those messages, published by the same official ADSP code: [0] data delivered to a client, [1] sends dropped for want of
+// a remote intent, [2] features, [3..4] our intents advertised/held, [5..6] the remote's valid/busy, [7..22] one count per inbound GLINK
+// command id, [23..26] the first payload bytes as they arrived, [27] how long that message was, [28] messages for an unknown channel id.
+extern "C" {extern volatile int32_t native_adsp_glink[32];}
+// The receive side's own counts, for which the 16 slots above have no room: [0] messages that were not a decodable APR packet -- these
+// used to be counted as ring-full drops, which made a decoder problem look like a full pipe -- [1] APR packets taken off the ring,
+// [2] rungs given up on that the vendor itself can live without, [3] the last of them, [4] how it ended (0 refused, 1 silent).
+extern "C" {volatile int32_t native_audio_detail[8];}
 
 namespace {
 constexpr uint32_t kAnswerMs = 1000, kRetryMs = 100, kTries = 3;   // Q6_READY_TIMEOUT_MS and the pause between two tries
@@ -159,10 +170,33 @@ struct Audio {
     uint32_t volumeMilli, volumeSets;                          // the slider the plug-in recorded, and how often the audio server moved it
     uint32_t late, holes;                                      // regions taken before the plug-in wrote them, and those that held a 64-frame run of silence
     uint32_t lastRow;                                          // what the last [apr] os= line said, so the row only appears when it changes
+    uint32_t unknownSeen;                                       // how many unknown properties the plug-in has already reported
+    uint32_t traceSeen;                                        // how many trace-ring entries have already had a line printed
+    uint32_t badTally[4];                                      // undecodable inbound messages, one count per reason the decoder gives
+    uint32_t badSeen;                                          // which of those reasons has already had a line printed
 };
 Audio gAudio;
 
 void bump(int index) {native_audio_stats[index] = native_audio_stats[index] + 1;}
+// Same reason as bump(): the kernel build spells volatile as __volatile, so ++ on one of these arrays is a -Werror warning, not a count.
+void bumpDetail(int index) {native_audio_detail[index] = native_audio_detail[index] + 1;}
+// An answer we cannot parse and no answer at all look identical from where the ladder sits: both leave ans=0. The decoder does tell them
+// apart and names which check failed, but that name was thrown away -- which is why a boot that took nine messages off the link and
+// parsed none of them could not say whether the ADSP's APR header, its length or our version assumption was the one at fault. The first
+// message of each reason is printed as far as the 20-byte reference header reaches (include/linux/soc/qcom/apr.h:54-64: hdr_field and
+// pkt_size as u16, src svc/domain/port, dest svc/domain/port, then token and opcode as u32).
+uint32_t headWord(const uint8_t *p) {return (uint32_t)p[0] | (uint32_t)p[1] << 8 | (uint32_t)p[2] << 16 | (uint32_t)p[3] << 24;}
+void noteBad(int code, const uint8_t *data, uint32_t length) {
+    if (code > AprShort || code < AprBadSize) return;                 // 0 is success; anything past the four reasons is not ours to name
+    const unsigned i = (unsigned)(-code - 1);
+    gAudio.badTally[i] = gAudio.badTally[i] + 1;
+    if (gAudio.badSeen & (1u << i)) return;
+    gAudio.badSeen |= 1u << i;
+    kprintf("[apr] bad=%d len=%u n=%u h=%x:%x:%x:%x:%x\n", code, length, gAudio.badTally[i],
+            length >= 4u ? headWord(data) : 0u, length >= 8u ? headWord(data + 4) : 0u,
+            length >= 12u ? headWord(data + 8) : 0u, length >= 16u ? headWord(data + 12) : 0u,
+            length >= 20u ? headWord(data + 16) : 0u);
+}
 // Host milliseconds since boot. The request trail keeps this, so a row of native_audio_requests says both when and what.
 uint64_t nowMs() {
     uint64_t ns = 0;
@@ -195,17 +229,32 @@ void reached(int step) {
 // whether the packet left us at all (tx), whether the link ever came up (link) and whether an answer arrived that we did not match (none).
 // cid=/ack= are the two halves of the open dance on our own channel -- an ack with no cid is a channel that never learned the DSP's number,
 // a cid with no ack is one the DSP never confirmed -- and unmatch= counts the DSP messages keyed by a number we do not have.
+// What the link itself took in. Two boots that both show answers=0 are not the same machine if one of them received a data message we
+// could not read and the other received nothing but intents and acknowledgements, and nothing above this row can tell them apart. The
+// histogram buckets are the GLINK command ids: 2 OPEN, 4 OPEN_ACK, 5 INTENT, 6 RX_DONE, 7 INTENT_REQ, 9 TX_DATA, 12 TX_DATA_CONT,
+// 13 READ_NOTIF.
+void linkRow() {
+    kprintf("[apr] link data=%d drop=%d unmatch=%d feat=%x intents=%d/%d remote=%d/%d "
+            "hist=%d,%d,%d,%d,%d,%d,%d,%d raw=%x:%x:%x:%x/%d\n",
+            native_adsp_glink[0], native_adsp_glink[1], native_adsp_glink[28], native_adsp_glink[2],
+            native_adsp_glink[3], native_adsp_glink[4], native_adsp_glink[5], native_adsp_glink[6],
+            native_adsp_glink[9], native_adsp_glink[11], native_adsp_glink[12], native_adsp_glink[13],
+            native_adsp_glink[14], native_adsp_glink[16], native_adsp_glink[19], native_adsp_glink[20],
+            native_adsp_glink[23], native_adsp_glink[24], native_adsp_glink[25], native_adsp_glink[26],
+            native_adsp_glink[27]);
+}
 void failed(int step) {
     native_audio_stats[0] = -step;
     record();
-    kprintf("[apr] fail step=%d status=%d op=%x tries=%d tx=%d rx=%d link=%x opens=%d sent=%d ans=%d none=%d ref=%d "
+    kprintf("[apr] fail step=%d status=%d op=%x tries=%d tx=%d rx=%d link=%x opens=%d sent=%d ans=%d none=%d ref=%d bad=%d "
             "glink=%d:%d:%d cid=%d ack=%d rop=%d unmatch=%d/%x,%d\n", step,
             native_audio_stats[3], native_audio_stats[10], gAudio.tries, native_adsp_stats[10], native_adsp_stats[9],
             native_adsp_stats[11], native_adsp_stats[12], native_audio_stats[1], native_audio_stats[2],
-            native_audio_stats[6], native_audio_stats[12],
+            native_audio_stats[6], native_audio_stats[12], native_audio_detail[0],
             native_adsp_audio[0], native_adsp_audio[1], native_adsp_audio[2],
             native_adsp_audio[9], native_adsp_audio[10], native_adsp_audio[11],
             native_adsp_audio[12], native_adsp_audio[13] >> 16, native_adsp_audio[13] & 0xffff);
+    linkRow();
 }
 
 // ---- the TDM pads (huawei-audio.dtsi:44-46 -> kona-pinctrl.dtsi:1858-1960, pinctrl-kona.c:1694-1700) ----
@@ -279,9 +328,11 @@ uint32_t encCopp(uint8_t *out, uint32_t capacity, uint32_t token) {
     return apr_adm_device_open(out, capacity, token, &o);
 }
 uint32_t encMatrix(uint8_t *out, uint32_t capacity, uint32_t token) {
-    // The route binds the ASM session to the COPP the ADM handed back when the device was opened (q6adm.c:1854-1857 stores it,
-    // :3722-3735 sends it). A port id here is a different number and the ADSP refuses it.
-    if (!gAudio.coppId || gAudio.coppId == ADM_INVALID_COPP_ID) return 0;
+    // The route binds the ASM stream to the COPP the ADM handed back when the device was opened, and the vendor rejects exactly one
+    // value of it: q6adm.c:190 gives up only when the answer's copp_id reads INVALID_COPP_ID (0xFF, q6adm.c:32). Zero is the first
+    // real COPP id, and this board answered our device open with 0 -- refusing it here is what kept the matrix map from ever going
+    // out, which is why the last rung the board had answered was still the device open.
+    if (gAudio.coppId == ADM_INVALID_COPP_ID) return 0;
     return apr_adm_matrix_map(out, capacity, token, kSession, &gAudio.coppId, 1);
 }
 uint32_t encOpen(uint8_t *out, uint32_t capacity, uint32_t token) {
@@ -299,8 +350,9 @@ uint32_t encMap(uint8_t *out, uint32_t capacity, uint32_t token) {
     return apr_asm_memory_map(out, capacity, token, addr, size, kRegions);
 }
 uint32_t encFormat(uint8_t *out, uint32_t capacity, uint32_t token) {
-    // mode 0 is the default Q format for the word size, the endianness field is written by the encoder itself
-    const AprPcmFormat f = {kChannels, kBits, kBits, 0, kRate};
+    // msm-pcm-q6-v2.c:375-377 gives an S16_LE stream the word size 16, and :449-451 passes ASM_LITTLE_ENDIAN (the encoder's own
+    // field) plus DEFAULT_QF as the mode.
+    const AprPcmFormat f = {kChannels, kBits, kBits, ASM_Q_FORMAT_DEFAULT, kRate};
     return apr_asm_media_format(out, capacity, token, kSession, kStream, &f);
 }
 uint32_t encRun(uint8_t *out, uint32_t capacity, uint32_t token) {
@@ -313,16 +365,25 @@ uint32_t encVolume(uint8_t *out, uint32_t capacity, uint32_t token) {
     return apr_asm_set_volume(out, capacity, token, kSession, kStream, gAudio.volumeQ13);
 }
 const Step kLadder[] = {
-    {StVersion, APR_OP_AVCSS_GET_FWK_VERSION, APR_OP_AVCSS_GET_FWK_VERSION_RSP, encVersion, 1},
+    // The vendor's own order, and the vendor's own tolerance. q6core.c:661 only reaches the version query through
+    // q6core_is_adsp_ready(), and neither of these two questions can stop the audio path: q6core.c:464-467 caches the version as
+    // VER_QUERY_UNSUPPORTED the moment the ADSP says EUNSUPPORTED, and q6core_get_fwk_version_size() takes the `if (ret) goto done`
+    // exit, so every module goes on with the API versions it hardcodes. That is why level 1 rungs are given up on instead of failed
+    // (endRung): this pair is the only part of the ladder upstream treats as optional, and everything from the AFE clock on is not.
     {StCore,    APR_OP_CORE_GET_STATE,        APR_OP_CORE_STATE_RSP,            encCore,    1},
+    {StVersion, APR_OP_AVCSS_GET_FWK_VERSION, APR_OP_AVCSS_GET_FWK_VERSION_RSP, encVersion, 1},
     {StClock,   APR_OP_AFE_SVC_SET_PARAM,     APR_OP_BASIC_RESULT,              encClock,   2},
     {StTdm,     APR_OP_AFE_PORT_SET_PARAM_V2, APR_OP_BASIC_RESULT,              encTdm,     2},
     {StSlots,   APR_OP_AFE_PORT_SET_PARAM_V2, APR_OP_BASIC_RESULT,              encSlots,   2},
     {StPort,    APR_OP_AFE_PORT_START,        APR_OP_BASIC_RESULT,              encPort,    2},
-    {StCopp,    APR_OP_ADM_DEVICE_OPEN_V8,    APR_OP_ADM_DEVICE_OPEN_RSP_V8,    encCopp,    2},
-    {StMatrix,  APR_OP_ADM_MATRIX_MAP_V5,     APR_OP_BASIC_RESULT,              encMatrix,  2},
-    {StOpen,    APR_OP_ASM_OPEN_WRITE_V3,     APR_OP_BASIC_RESULT,              encOpen,    3},
+    // The order this board's own platform driver produces (asoc/msm-pcm-q6-v2.c): msm_pcm_hw_params:1176 allocates the ring and
+    // q6asm.c:1656 ends it with the memory map, then msm_pcm_playback_prepare sends the open (:396), the route (:426, which is the
+    // ADM device open and the matrix map) and the media format (:445), and only the trigger runs the stream (:641). The route names
+    // the ASM session, so it cannot precede the session the way those two rungs used to sit in front of it.
     {StMapped,  APR_OP_ASM_MEM_MAP,           APR_OP_ASM_MEM_MAP_RSP,           encMap,     3},
+    {StOpen,    APR_OP_ASM_OPEN_WRITE_V3,     APR_OP_BASIC_RESULT,              encOpen,    3},
+    {StCopp,    APR_OP_ADM_DEVICE_OPEN_V8,    APR_OP_ADM_DEVICE_OPEN_RSP_V8,    encCopp,    3},
+    {StMatrix,  APR_OP_ADM_MATRIX_MAP_V5,     APR_OP_BASIC_RESULT,              encMatrix,  3},
     {StFormat,  APR_OP_ASM_MEDIA_FMT_V2,      APR_OP_BASIC_RESULT,              encFormat,  3},
     // Before the run, so the gain is in place when the first samples reach the block. The encoder answers with the V3 opcode if the
     // ADSP ever reports that it carries instance ids; nothing on this board sets that flag, so V2 is what goes out.
@@ -372,6 +433,57 @@ bool setupShared() {
 const ShengAudioDiag *diag() {
     return gAudio.ctl ? reinterpret_cast<const ShengAudioDiag *>(reinterpret_cast<const uint8_t *>(gAudio.ctl) +
                                                                    SHENG_AUDIO_DIAG_OFFSET) : nullptr;
+}
+
+// [apr] unk=: the properties the audio server asked the plug-in for and did not get, as fourccs. This is the half of the built-in
+// classification that is still missing -- a device the routing layer accepts as built-in is expected to describe ports, and the only
+// honest way to learn which description it wants is to read the selector it asked with. The unified log has the same text, but nothing
+// on this board reads the unified log, so the plug-in writes the list on the shared page and this prints each entry once.
+void unknownRow() {
+    const ShengAudioDiag *d = diag();
+    if (!d) return;
+    const uint32_t n = d->count;
+    for (uint32_t i = gAudio.unknownSeen; i < n && i < SHENG_AUDIO_DIAG_SLOTS; ++i) {
+        const uint32_t s = d->selector[i], w = d->where[i];
+        // The fourccs are spelled out rather than printed in hex, because the row is read by a person: kprintf's %s is the only
+        // conversion this tree has ever used, so the bytes go into a terminated buffer instead of through a %c nobody here has proven.
+        const char sel[5] = {(char)(s >> 24), (char)(s >> 16), (char)(s >> 8), (char)s, 0};
+        const char scope[2] = {(char)(w & 0xff), 0};
+        kprintf("[apr] unk=%u %s obj=%u sc=%s\n", i, sel, (unsigned)(w >> 24), scope);
+    }
+    if (n > gAudio.unknownSeen) gAudio.unknownSeen = n < SHENG_AUDIO_DIAG_SLOTS ? n : SHENG_AUDIO_DIAG_SLOTS;
+}
+
+// [apr] tr=: what the plug-in put in the trace ring since the last line, which nothing has ever printed. The ring is the audio server's own
+// traffic rather than ours: kind 0 a property read it asked for, 1 a property write, 4 a call of its own that failed on an object that is not
+// ours and so never reached a method of this bundle, and 8 a C++ throw inside the routing layer, whose selector word is that thrower's offset
+// in its own image. The object is the low byte of the id and the scope only its first character, because that is all the ring carries; a
+// selector that is not four printable bytes is an offset and reads only as the hex. This is the readout that names what the built-in path
+// asks for, as opposed to what it answers: the classification boot of ord198 streamed through the device with an empty unknown ring, which
+// says the server asked this plug-in nothing -- so either it addressed another object, which kind 4 shows, or it threw, which kind 8 shows.
+void traceRow() {
+    if (!gAudio.ctl) return;
+    const ShengAudioTrace *t = reinterpret_cast<const ShengAudioTrace *>(reinterpret_cast<const uint8_t *>(gAudio.ctl) +
+                                                                        SHENG_AUDIO_TRACE_OFFSET);
+    const uint32_t n = t->count;
+    for (uint32_t i = gAudio.traceSeen; i < n && i < SHENG_AUDIO_TRACE_SLOTS; ++i) {
+        const uint32_t s = t->entry[i][0], w = t->entry[i][1];
+        // The plug-in packs the word as object in the top byte, the first byte of the scope under it, the kind in the low half and the
+        // failure in bit 1, which no kind it uses occupies.
+        const uint32_t kind = w & 0xfffeu;
+        if (kind == 0) continue;    // kind 0 is a property read, and a refused read already has its own unk= line
+        char text[5] = {'?', '?', '?', '?', 0};
+        for (unsigned b = 0; b < 4; ++b) {
+            const uint32_t c = s >> (24 - 8 * b);
+            if (c >= 0x20 && c < 0x7f) text[b] = (char)c;
+        }
+        const uint32_t sc = (w >> 16) & 0xff;
+        // The selector word is a fourcc for a call and an image offset for a throw, so both spellings print: the letters read as a
+        // property, the hex reads as a symbol address.
+        kprintf("[apr] tr=%u %s:%08x obj=%u sc=%c kind=%u%s\n", i, text, s, (unsigned)(w >> 24) & 0xff,
+                sc >= 0x20 && sc < 0x7f ? (char)sc : '-', kind, (w & 2u) ? " failed" : "");
+    }
+    if (n > gAudio.traceSeen) gAudio.traceSeen = n < SHENG_AUDIO_TRACE_SLOTS ? n : SHENG_AUDIO_TRACE_SLOTS;
 }
 
 // The loudest playback sample the pump has taken out of the ring, x 32767, in the low half of [audio-service] peak=. The high half is
@@ -490,21 +602,20 @@ void issueWrite() {
     record();
 }
 
+void endRung(int cause);   // a rung that will not be answered ends the same way from the send path as from the timers
 void sendStep() {
     const Step &s = kLadder[gAudio.step];
     uint8_t packet[APR_MAX_PACKET];
     gAudio.token = apr_pending_add(&gAudio.pending, s.request, s.response);
-    if (!gAudio.token) {failed(s.step); return;}
+    if (!gAudio.token) {endRung(0); return;}
     const uint32_t n = s.encode(packet, sizeof packet, gAudio.token);
-    if (!n) {failed(s.step); return;}
+    if (!n) {endRung(0); return;}
     if (sheng_adsp_send(gAudio.channel, packet, n)) bump(12);   // the answer timer still counts it
     gAudio.answer->setTimeoutMS(kAnswerMs);
     record();
 }
-void nextStep() {
-    gAudio.answer->cancelTimeout();
-    gAudio.tries = 0;
-    reached(kLadder[gAudio.step].step);
+// The part of the ladder that does not care whether the last rung was answered or given up on: the next rung the level runs, or the stream.
+void advance() {
     for (gAudio.step++; gAudio.step < (int)kSteps; ++gAudio.step)
         if (kLadder[gAudio.step].level <= (int)gAudio.level) break;
     if (gAudio.step >= (int)kSteps) {                       // the ladder is done: start the stream
@@ -512,32 +623,52 @@ void nextStep() {
         // The vendor unmutes the amplifiers after the stream exists, so this is the point where their on-scene belongs; counted on
         // its own line so one flash answers the slot-geometry question and the amplifier-drive question separately.
         kprintf("[apr] pa=%u\n", dby_smartpa_play());
-        // The audio server's half comes up with the stream: the rings have to exist before the plug-in can be handed them, and the
-        // timeline's zero is the first region, which the pace timer issues on its first round below. A page that cannot be allocated or
-        // a service that cannot be published leaves the tone in place -- the ladder is still proven, only the OS side is missing.
-        if (gAudio.level >= 3 && !gAudio.serving) {
-            if (!setupShared()) kprintf("[apr] os=page fail\n");
-            else if (!publishService()) kprintf("[apr] os=publish fail\n");
-            else {
-                __atomic_or_fetch(&gAudio.ctl->state, ShengAudioOutputReady, __ATOMIC_ACQ_REL);
-                __atomic_store_n(&gAudio.serving, 1u, __ATOMIC_RELEASE);
-                kprintf("[apr] os=ready ticks=%u per frame\n", (unsigned)(gAudio.ctl->ticks_per_frame_q32 >> 32));
-            }
-        }
+        // The stream is what makes the port playable; the service itself already went up with the channel, so all that is left here is
+        // to say so on the shared page.
+        if (gAudio.serving) __atomic_or_fetch(&gAudio.ctl->state, ShengAudioOutputReady, __ATOMIC_ACQ_REL);
+        kprintf("[apr] os=stream ticks=%u per frame\n", (unsigned)(gAudio.ctl ? gAudio.ctl->ticks_per_frame_q32 >> 32 : 0));
         gAudio.pace->setTimeoutMS(kRetryMs);
         return;
     }
     sendStep();
+}
+// Two ways to finish a rung, and the vendor keeps them apart. The CORE state and the AVCS version pair (level 1) are cached as
+// unsupported when the ADSP does not answer them and every module then runs on the API versions it hardcodes, so giving up on one of
+// them means the ladder moves on; the rungs after them are the AFE, ADM and ASM path, and each is built on the answer before it.
+void endRung(int cause) {   // 0: the DSP refused us or the packet would not form, 1: nothing came back
+    const Step &s = kLadder[gAudio.step];
+    gAudio.answer->cancelTimeout();
+    if (s.level > 1) {failed(s.step); return;}
+    bumpDetail(2);
+    native_audio_detail[3] = s.step;
+    native_audio_detail[4] = cause;
+    const uint32_t tries = gAudio.tries;
+    gAudio.tries = 0;
+    record();
+    kprintf("[apr] skip step=%d cause=%d tries=%u tx=%d rx=%d ans=%d status=%d op=%x\n", s.step, cause,
+            tries, native_adsp_stats[10], native_adsp_stats[9], native_audio_stats[2],
+            native_audio_stats[3], native_audio_stats[10]);
+    linkRow();
+    advance();
+}
+void nextStep() {
+    gAudio.answer->cancelTimeout();
+    gAudio.tries = 0;
+    reached(kLadder[gAudio.step].step);
+    advance();
 }
 void outcome(int result, uint32_t request, uint32_t status) {
     if (result == AprPUnknown) return;
     if (gAudio.step < 0 || gAudio.step >= (int)kSteps) return;   // the ladder is done, nothing awaits an answer
     // An answer that names a step we already left is not an answer to the step we are on; ignore it rather than skip a rung.
     if (result != AprPResult && request != kLadder[gAudio.step].request) return;
-    if (result == AprPAck || (result == AprPResult && status == APR_RSP_ACCEPTED)) {nextStep(); return;}
+    // q6afe.c:1090 reads the basic result's status word as an error and treats only a non-zero value as one: zero is the
+    // DSP accepting the command. 0x000100BE is the GPR-era "accepted" opcode, a different plane, and no vendor APR path
+    // compares a basic result status against it -- the board answers our clock gate with status 0 and that is a yes.
+    if (result == AprPAck || (result == AprPResult && status == 0)) {nextStep(); return;}
     // refused, an event where the awaited response was due, or a status we did not ask about: try again, then give up on this step.
     gAudio.answer->cancelTimeout();
-    if (++gAudio.tries >= kTries) {failed(kLadder[gAudio.step].step); return;}
+    if (++gAudio.tries >= kTries) {endRung(0); return;}
     gAudio.retry->setTimeoutMS(kRetryMs);
 }
 
@@ -569,6 +700,21 @@ void inboxFired(OSObject *, IOInterruptEventSource *, int) {
             gAudio.upAt = mach_absolute_time();
             apr_pending_init(&gAudio.pending);
             gAudio.step = 0;
+            // The audio server's half comes up with the channel, not with the stream. Every recorded boot leaves the service
+            // unpublished -- no "[apr] os=" line exists in any COM4 log -- because this block used to sit at the end of the ladder, and
+            // the vendor's own CORE/AVCS rungs are allowed to go unanswered. With no service the plug-in's connectService() fails, so
+            // native_audio_requests, the control page and the diag half all stay empty and a volume control that will not move has
+            // nothing to be measured against. Handing the rings out early costs nothing: the tone is replaced only from paceFired, and
+            // the pace timer is armed when the ladder finishes, so a connected audio server waits on the ring instead of muting proof.
+            if (gAudio.level >= 3 && !gAudio.serving) {
+                if (!setupShared()) kprintf("[apr] os=page fail\n");
+                else if (!publishService()) kprintf("[apr] os=publish fail\n");
+                else {
+                    __atomic_store_n(&gAudio.serving, 1u, __ATOMIC_RELEASE);
+                    kprintf("[apr] os=service ticks=%u per frame\n", (unsigned)(gAudio.ctl->ticks_per_frame_q32 >> 32));
+                    gAudio.pace->setTimeoutMS(kRetryMs);   // the round also prints the audio server's rows, even if a rung below stops the ladder
+                }
+            }
             if (gAudio.level >= 2 && !muxPads()) {failed(StPads); return;}
             if (gAudio.level >= 2) reached(StPads);
             native_audio_stats[0] = StUp;
@@ -596,7 +742,10 @@ void inboxFired(OSObject *, IOInterruptEventSource *, int) {
         IOSimpleLockUnlock(gAudio.ringLock);
         if (!length) break;
         AprMessage m;
-        if (apr_decode(data, length, &m)) {bump(11); continue;}
+        // A message whose own header does not describe it is not a full pipe. The two were counted in the same slot, which made a
+        // decoder problem look like a transport one; the ring-full drop stays in stats[11], this goes on its own.
+        if (const int bad = apr_decode(data, length, &m)) {bumpDetail(0); noteBad(bad, data, length); continue;}
+        bumpDetail(1);
         uint32_t request = 0, status = 0;
         if (m.opcode == APR_OP_AVCSS_GET_FWK_VERSION_RSP) {           // what wire family each service on this ADSP speaks
             uint32_t services = 0;
@@ -630,16 +779,20 @@ void answerFired(OSObject *, IOTimerEventSource *) {
     if (gAudio.step < 0 || gAudio.step >= (int)kSteps) return;
     apr_pending_timeout(&gAudio.pending, gAudio.token);
     record();
-    if (++gAudio.tries >= kTries) {failed(kLadder[gAudio.step].step); return;}
+    if (++gAudio.tries >= kTries) {endRung(1); return;}
     gAudio.retry->setTimeoutMS(kRetryMs);
 }
 void retryFired(OSObject *, IOTimerEventSource *) {
     if (gAudio.wasUp && gAudio.step >= 0 && gAudio.step < (int)kSteps) sendStep();
 }
 void paceFired(OSObject *, IOTimerEventSource *) {
-    if (!gAudio.wasUp || !gAudio.pcmVa) return;
-    for (unsigned n = 0; n < kRegions; ++n) issueWrite();   // a region the DSP still holds is skipped inside
+    // The ring is only fed once the ladder has actually reached the stream; the audio server's rows print on every round, because the
+    // service is published before the ladder and its answers are worth reading even when a rung below refuses to come back.
+    if (gAudio.wasUp && gAudio.pcmVa && gAudio.step >= (int)kSteps)
+        for (unsigned n = 0; n < kRegions; ++n) issueWrite();   // a region the DSP still holds is skipped inside
     serviceRow();                                           // the audio server's side, once per change
+    unknownRow();
+    traceRow();
     gAudio.pace->setTimeoutMS(kRetryMs);   // 100 ms, a little over one 85 ms round of four regions
 }
 

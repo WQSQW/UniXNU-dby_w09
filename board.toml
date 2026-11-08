@@ -333,6 +333,8 @@ kernel_args = [
   # 2026-11-04 00:30: 1 -> 2. At 1 the OS lays out on 1600 x 2560 logical points, so a 10.8" panel
   # renders iPad UI at half size ("UI 太小了", owner report after the touch fix). 2 = 800 x 1280 pt,
   # iPad Pro 11 territory. Touch is published in real pixels and does not depend on this number.
+  # 2026-11-08 回到 2。1 是我为了让闪屏先消失退回官方 1:1 的，当天判定：UI 变成特别小的一档，
+  # 而闪屏与缩放无关——2 才是这台板子的正常大小。
   "offline-legacy-unit-scale=2",
   "offline-legacy-pm=1",
   "offline-legacy-transfer=1",
@@ -416,6 +418,10 @@ kernel_args = [
   # 读者是 package/BacklightProbe.cpp，由 LegacyDisplayProbe.cpp:503 的 sheng_backlight_probe()
   # 调进来（LinkStubs.c:131 是它的弱空桩）。不传则整条背光服务不启动，亮度停在引导
   # 器留下的值。命名按本板 dby- 短名规范，不用 sheng-backlight=1（后者 18 字节）。
+  # 2026-11-08 恢复 dby-bl=1。它是亮度滑杆唯一的启用开关（读者 package/BacklightProbe.cpp），
+  # 撤下它的代价当天就看到了：亮度调节整个消失。面板抖动的嫌疑不在这道门里，不能拿一个
+  # 已验收的功能去换一个未证实的猜测。功放与它无关：dby_smartpa_probe() 在 dby-bl 判断之前调用
+  # （BacklightProbe.cpp:22-24）。
   "dby-bl=1",
   # 2026-11-06 dby-pa=3（8 字节）：四颗 smartpa 的固件套选择。读者是 package/DbySmartPA.cpp
   # （dby_smartpa_probe，由 BacklightProbe.cpp 调进）。本板厂商 dts（kona/DBY/W09_VA/huawei-audio.dtsi）

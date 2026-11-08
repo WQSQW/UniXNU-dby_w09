@@ -179,6 +179,14 @@ static void note_unmatched(QcomGlink *g, uint16_t cmd, uint16_t cid)
     g->last_unmatched_cid = cid;
 }
 
+/* One message taken off the FIFO, counted by kind. Which commands arrived is the difference between a DSP that answered in a form we
+ * do not read and a DSP that answered nothing: both leave answers=0 on the ladder. */
+static void counted(QcomGlink *g, uint16_t cmd)
+{
+    g->cmd_hist[cmd & 15u]++;
+    g->rx_messages++;
+}
+
 /* Channel bring-up and our intents: whatever is due and fits in the FIFO now. */
 static void progress(QcomGlink *g)
 {
@@ -237,6 +245,15 @@ static int handle_data(QcomGlink *g, uint16_t cmd, uint32_t rcid, uint32_t liid,
             if (!left) {
                 c->local[index].busy = 1;
                 g->rx_data++;
+                // The bytes as they arrived, before any reader interprets them: the one piece of evidence that separates "the DSP
+                // answered in a form we do not parse" from "the DSP answered nothing", which every counter above cannot tell apart.
+                if (!g->rx_first_bytes) {
+                    const uint8_t *from = c->storage + (size_t)index * c->intent_size;
+                    const uint32_t bytes = fill < 16u ? fill : 16u;
+                    uint8_t *to = (uint8_t *)g->rx_first;
+                    for (uint32_t b = 0; b < bytes; ++b) to[b] = from[b];
+                    g->rx_first_bytes = fill;
+                }
                 if (c->client.receive) c->client.receive(c->context, c, c->storage + (size_t)index * c->intent_size, fill);
                 c->local[index].busy = 0;
                 fill = 0;
@@ -334,7 +351,7 @@ static int receive_one(QcomGlink *g)
             }
         }
         rx_advance(&g->rx, align8(8 + n));
-        g->rx_messages++;
+        counted(g, cmd);
         return 1;
     }
     case QCOM_GLINK_OPEN_ACK:
@@ -382,7 +399,7 @@ static int receive_one(QcomGlink *g)
         }
         if (c) c->intent_asked = 0;
         rx_advance(&g->rx, align8(bytes));
-        g->rx_messages++;
+        counted(g, cmd);
         return 1;
     }
     case QCOM_GLINK_RX_DONE:
@@ -415,7 +432,7 @@ static int receive_one(QcomGlink *g)
     case QCOM_GLINK_TX_DATA:
     case QCOM_GLINK_TX_DATA_CONT: {
         const int rc = handle_data(g, cmd, param1, param2, avail);
-        if (rc == 1) g->rx_messages++;
+        if (rc == 1) counted(g, cmd);
         return rc;
     }
     case QCOM_GLINK_READ_NOTIF:
@@ -427,7 +444,7 @@ static int receive_one(QcomGlink *g)
         return QcomGlinkCorrupt;
     }
     rx_advance(&g->rx, 8);
-    g->rx_messages++;
+    counted(g, cmd);
     return 1;
 }
 

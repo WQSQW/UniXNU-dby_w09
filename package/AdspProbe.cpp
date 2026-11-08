@@ -105,6 +105,10 @@ volatile uint32_t gPending, gRscDone;
 struct Message {uint32_t length; uint8_t data[SHENG_ADSP_MAX_MESSAGE];};
 }  // namespace
 extern "C" {volatile int32_t native_adsp_audio[14];}
+// The link's own evidence, kept out of the 16 slots the stages already use: [0] data messages delivered to a client, [1] sends dropped for
+// want of a remote intent, [2] agreed features, [3..4] our intents advertised / still holding a message, [5..6] the remote's intents valid /
+// busy, [7..22] one count per inbound command id, [23..26] the first raw message words, [27] its length, [28] messages for an unknown cid.
+extern "C" {volatile int32_t native_adsp_glink[32];}
 struct ShengAdspChannel {
     char name[QCOM_GLINK_NAME];
     uint32_t intent_size, intent_count;
@@ -385,6 +389,26 @@ void serviceSmp2p() {
 
 void applyClients();
 void pumpSends();
+// Intent occupancy, which nothing else can show: a send that left us and an answer that never reached a client look identical in the
+// message counts, but differ in whether the buffers on either side are free.
+static uint32_t localIntents(const QcomGlinkChannel *c, int busy) {
+    const uint32_t count = c->intent_count < QCOM_GLINK_MAX_LOCAL_INTENTS ? c->intent_count : QCOM_GLINK_MAX_LOCAL_INTENTS;
+    uint32_t n = 0;
+    for (uint32_t k = 0; k < count; ++k)
+        if (busy ? c->local[k].busy : c->local[k].advertised) n++;
+    return n;
+}
+static uint32_t remoteIntents(const QcomGlinkChannel *c, int busy) {
+    uint32_t n = 0;
+    for (unsigned k = 0; k < QCOM_GLINK_MAX_REMOTE_INTENTS; ++k)
+        if (busy ? c->remote[k].busy : c->remote[k].valid) n++;
+    return n;
+}
+static QcomGlinkChannel *channelByName(const char *name) {
+    for (unsigned i = 0; i < QCOM_GLINK_MAX_CHANNELS; ++i)
+        if (gGlink.channel[i].used && !strncmp(gGlink.channel[i].name, name, QCOM_GLINK_NAME)) return &gGlink.channel[i];
+    return nullptr;
+}
 void serviceGlink() {
     if (!gGlinkStarted) return;
     if (!gGlink.rx.data) {
@@ -399,6 +423,22 @@ void serviceGlink() {
     native_adsp_stats[10] = (int32_t)gGlink.tx_messages;
     native_adsp_stats[11] = (int32_t)(up | (uint32_t)gGlink.version_agreed << 14 | (uint32_t)gGlink.broken << 15);
     native_adsp_stats[12] = (int32_t)gGlink.unknown_opens;
+    QcomGlinkChannel *apr = channelByName("apr_audio_svc");
+    QcomGlinkChannel *spf = channelByName("adsp_apps");
+    native_adsp_glink[0] = (int32_t)gGlink.rx_data;
+    native_adsp_glink[1] = (int32_t)gGlink.dropped;
+    native_adsp_glink[2] = (int32_t)gGlink.features;
+    native_adsp_glink[3] = apr ? (int32_t)localIntents(apr, 0) : -1;
+    native_adsp_glink[4] = apr ? (int32_t)localIntents(apr, 1) : -1;
+    native_adsp_glink[5] = apr ? (int32_t)remoteIntents(apr, 0) : -1;
+    native_adsp_glink[6] = apr ? (int32_t)remoteIntents(apr, 1) : -1;
+    for (unsigned k = 0; k < 16; ++k) native_adsp_glink[7 + k] = (int32_t)gGlink.cmd_hist[k];
+    for (unsigned k = 0; k < 4; ++k) native_adsp_glink[23 + k] = (int32_t)gGlink.rx_first[k];
+    native_adsp_glink[27] = (int32_t)gGlink.rx_first_bytes;
+    native_adsp_glink[28] = (int32_t)gGlink.unmatched;
+    native_adsp_glink[29] = spf ? (int32_t)remoteIntents(spf, 0) : -1;  // intents we could send a GPR request into
+    native_adsp_glink[30] = spf ? (int32_t)localIntents(spf, 0) : -1;   // intents the SPF side has for our answers
+    native_adsp_glink[31] = spf ? (int32_t)spf->up : -1;
     if (gGlink.unknown_opens && strncmp(native_adsp_text, "crash: ", 7)) {
         note("open: ", gGlink.unknown_names);
         static char shown[sizeof gGlink.unknown_names];  // the row is for the ring, so only a new list is worth a line

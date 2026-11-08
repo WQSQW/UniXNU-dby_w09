@@ -40,9 +40,9 @@ enum {AprSvcAdspCore = 3, AprSvcAfe = 4, AprSvcAsm = 7, AprSvcAdm = 8};
 #define APR_PARAM_HDR_V3_BYTES 16u     /* struct param_hdr_v3: u32 module_id, u16 instance, u16 reserved, u32 param_id, u32 size */
 #define APR_MEM_HDR_BYTES 12u          /* struct mem_mapping_hdr: three u32, all zero when the parameter travels in band */
 
-/* The APR accept/refuse answer every service may return: payload {request opcode, status} (apr.h:51-56). */
+/* The APR accept/refuse answer every service may return: payload {request opcode, status} (apr.h:51-56). The status is an
+ * error only when it is not zero (dsp/q6afe.c:1080-1097), so there is no "accepted" constant to compare it against. */
 #define APR_OP_BASIC_RESULT 0x000110E8u
-#define APR_RSP_ACCEPTED 0x000100BEu
 
 /* AVCS, the core service (dsp/q6core.c). The state query is header only and its answer carries one u32; the framework version query
  * is header only, ports 0 and token 0 (q6core.c:539-556), and its answer is struct avcs_get_fwk_version plus one
@@ -130,24 +130,27 @@ enum {AprSvcAdspCore = 3, AprSvcAfe = 4, AprSvcAsm = 7, AprSvcAdm = 8};
                                                            * gain, 0 mutes and 16384 is 0 dB, plus a u16 reserved the client must
                                                            * zero. __q6asm_set_volume (dsp/q6asm.c:8803-8828) sends exactly
                                                            * these four bytes to module VOL_CTRL, instance INSTANCE_ID_0. */
-#define ASM_MEDIA_FMT_MULTI_CHANNEL_PCM_V5 0x00013222u
+#define ASM_MEDIA_FMT_MULTI_CHANNEL_PCM_V5 0x00013222u   /* this board's own choice: msm-pcm-q6-v2.c:394-398 calls
+                                                          * q6asm_open_write_v5 once the AVCS ASM api version reaches
+                                                          * ADSP_ASM_API_VERSION_V2, and that hands PCM_MEDIA_FORMAT_V5 to
+                                                          * __q6asm_open_write (q6asm.c:3709-3714), which maps it to this id
+                                                          * through q6asm_get_pcm_format_id (:181-182). */
 #define ASM_POPP_TOPOLOGY_DEFAULT 0x00010BE4u        /* DEFAULT_POPP_TOPOLOGY (apr_audio-v2.h:5461). For a legacy PCM session
                                                       * __q6asm_open_write sends cal_info.topology_id, and
                                                       * q6asm_get_asm_topology_apptype sets exactly this value before it looks at
-                                                      * any calibration block (q6asm.c:11089-11092), so a postprocopo_id of 0 was
-                                                      * never what this ADSP saw. ASM_STREAM_POSTPROCOPO_ID_NONE (0x00010C68) is
-                                                      * only substituted when perf_mode is not LEGACY_PCM_MODE (:3519-3520). */
+                                                      * any calibration block (q6asm.c:11089-11092, used at :3516-3517), so a
+                                                      * postprocopo_id of 0 was never what this ADSP saw.
+                                                      * ASM_STREAM_POSTPROCOPO_ID_NONE (0x00010C68) is only substituted when
+                                                      * perf_mode is not LEGACY_PCM_MODE (:3519-3520). */
 #define ADSP_MEMORY_MAP_SHMEM8_4K_POOL 3u
 #define ASM_END_POINT_DEVICE_MATRIX 0u
 #define ASM_LEGACY_STREAM_SESSION 0u
 #define ASM_STREAM_ID_1 1u                           /* ac->stream_id (q6asm.c:1353) */
-#define ASM_LITTLE_ENDIAN 0u
-#define ASM_FMT_BLOCK_BYTES 48u                      /* struct asm_multi_channel_pcm_fmt_blk_v5 (apr_audio-v2.h:6120-6168):
-                                                      * 2+2+4+2+2+2+2+32, the payload after fmt_blk_size in
-                                                      * asm_multi_channel_pcm_fmt_blk_param_v5 (:6192-6197) */
-#define ADSP_ASM_API_VERSION_V2 2u                   /* q6asm-v2.h:108; at or above it msm-pcm-q6-v2.c:290 calls
-                                                      * q6asm_open_write_v5, which selects PCM_MEDIA_FORMAT_V5 and so
-                                                      * ASM_MEDIA_FMT_MULTI_CHANNEL_PCM_V5 as dec_fmt_id (:3670-3714) */
+#define ASM_LITTLE_ENDIAN 0u                         /* the endianness argument of the format call, msm-pcm-q6-v2.c:449-451 */
+#define ASM_Q_FORMAT_DEFAULT 0u                      /* DEFAULT_QF, the mode argument of that same call */
+#define ASM_FMT_BLOCK_BYTES 48u                      /* __q6asm_media_format_block_multi_ch_pcm_v5 (q6asm.c:7016-7060) writes
+                                                      * sizeof(fmt) - sizeof(fmt.hdr) - sizeof(fmt.fmt_blk): the v5 param block is
+                                                      * 2+2+4+2+2+2+2+32 (apr_audio-v2.h:6120-6168, :6192-6197). */
 
 /* The token an ASM packet carries is not a plain counter (q6asm.c:61-69): byte 0 stream id, byte 1 session id, byte 2 buffer
  * index, byte 3 flags with bit 0 = direction (IN/OUT) and bit 1 = no-wait. The write path puts the buffer index here and the
@@ -277,10 +280,11 @@ uint32_t apr_adm_matrix_map(uint8_t *out, uint32_t capacity, uint32_t token, uin
 /* ASM_CMD_SHARED_MEM_MAP_REGIONS: physical, 4 KB aligned regions (q6asm.c:8221-8290). The handle arrives in the answer. */
 uint32_t apr_asm_memory_map(uint8_t *out, uint32_t capacity, uint32_t token, const uint64_t *addresses, const uint32_t *sizes,
                             uint32_t num_regions);
-/* ASM_STREAM_CMD_OPEN_WRITE_V3: legacy session, matrix sink, multi-channel PCM v5 as the decoder id (q6asm.c:3480-3530). */
+/* ASM_STREAM_CMD_OPEN_WRITE_V3: legacy session, matrix sink, multi-channel PCM v5 as the decoder id (q6asm.c:3460-3540). */
 uint32_t apr_asm_open_write(uint8_t *out, uint32_t capacity, uint32_t token, uint8_t session, uint8_t stream_id,
                             uint16_t bits_per_sample, uint32_t postprocopo_id);
-/* ASM_DATA_CMD_MEDIA_FMT_UPDATE_V2 (q6asm.c:7016-7068): signed, little endian, default channel map. */
+/* ASM_DATA_CMD_MEDIA_FMT_UPDATE_V2 in the v5 form this board uses (q6asm.c:7016-7060, called from msm-pcm-q6-v2.c:445-451):
+ * signed, little endian, DEFAULT_QF mode and the default channel map. */
 typedef struct {
     uint16_t num_channels, bits_per_sample, sample_word_size, mode;
     uint32_t sample_rate;

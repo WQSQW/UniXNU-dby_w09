@@ -246,25 +246,27 @@ static void test_adm_asm(void)
     check32(buf, 32, 0, "region high word");
     check32(buf, 36, 4096, "region size");
 
-    n = apr_asm_open_write(buf, sizeof buf, 9, 1, ASM_STREAM_ID_1, 16, 0);
+    n = apr_asm_open_write(buf, sizeof buf, 9, 1, ASM_STREAM_ID_1, 16, ASM_POPP_TOPOLOGY_DEFAULT);
     check(n == 36, "open write is 36 bytes");
     check_header(buf, n, AprSvcAsm, 0x0101, 9, APR_OP_ASM_OPEN_WRITE_V3);
     check32(buf, 20, 0, "legacy stream session");
     check16(buf, 24, ASM_END_POINT_DEVICE_MATRIX, "matrix sink");
     check16(buf, 26, 16, "16 bit");
+    check32(buf, 28, ASM_POPP_TOPOLOGY_DEFAULT, "default popp topology");
     check32(buf, 32, ASM_MEDIA_FMT_MULTI_CHANNEL_PCM_V5, "multi channel pcm v5");
 
-    const AprPcmFormat fmt = {4, 16, 2, 0, 48000};
+    const AprPcmFormat fmt = {4, 16, 16, ASM_Q_FORMAT_DEFAULT, 48000};   /* msm-pcm-q6-v2.c:375-377 for S16_LE */
     n = apr_asm_media_format(buf, sizeof buf, 10, 1, ASM_STREAM_ID_1, &fmt);
-    check(n == 72, "the pcm format block is 72 bytes");
+    check(n == 72, "the v5 pcm format block is 72 bytes");
     check16(buf, 6, 0x0101, "the session port is session<<8 | stream");
     check32(buf, 20, ASM_FMT_BLOCK_BYTES, "fmt_blk_size");
     check16(buf, 24, 4, "four channels");
     check16(buf, 26, 16, "16 bits per sample");
     check32(buf, 28, 48000, "48 kHz");
     check16(buf, 32, 1, "signed pcm");
-    check16(buf, 34, 2, "two byte sample word");
+    check16(buf, 34, 16, "sixteen bit sample word");
     check16(buf, 36, ASM_LITTLE_ENDIAN, "little endian");
+    check16(buf, 38, ASM_Q_FORMAT_DEFAULT, "default Q format");
     check(buf[40] == PCM_CHANNEL_FL && buf[43] == PCM_CHANNEL_RS, "the format map matches the COPP map");
     check(buf[71] == 0, "the mapping array is zero padded");
 
@@ -409,7 +411,22 @@ static void test_decode_and_pending(void)
     put_le16(buf, 0, APR_HDR_FIELD(AprMsgCmdRsp, 16, APR_PKT_VER));
     check(apr_decode(buf, 24, &m) == AprBadHeader, "a header below 20 bytes is refused");
     put_le16(buf, 0, APR_HDR_FIELD(AprMsgCmdRsp, APR_HEADER_BYTES, 3));
-    check(apr_decode(buf, 24, &m) == AprBadVersion, "an unknown packet version is refused");
+    check(apr_decode(buf, 24, &m) == AprBadVersion, "a version above the two the vendor accepts is refused");
+
+    /* apr.c:613-640 refuses a version only when it is above APR_PKT_VER + 1, so the ADSP is allowed to answer in version 1.
+     * The board's last boot logged nine replies and nine refusals; a reply we cannot open is a reply we never received. */
+    put_le16(buf, 0, APR_HDR_FIELD(AprMsgCmdRsp, APR_HEADER_BYTES, APR_PKT_VER + 1));
+    check(apr_decode(buf, 24, &m) == AprOk, "the newer of the two legal versions decodes");
+    check(m.token == 55 && m.opcode == APR_OP_AFE_PORT_START, "and its fields read back unchanged");
+
+    /* "Wrong paket size" and "Wrong hdr size" are the vendor's two different rules; they get two different codes here so the boot
+     * log says which one stopped a message instead of making a refusal and a silence look the same. */
+    put_le16(buf, 0, APR_HDR_FIELD(AprMsgCmdRsp, APR_HEADER_BYTES, APR_PKT_VER));
+    put_le16(buf, 2, 16);
+    check(apr_decode(buf, 20, &m) == AprBadSize, "a packet size below the fixed header is refused as a size");
+    put_le16(buf, 0, APR_HDR_FIELD(AprMsgCmdRsp, 24, APR_PKT_VER));
+    put_le16(buf, 2, 22);
+    check(apr_decode(buf, 24, &m) == AprBadSize, "a packet smaller than its own header is refused as a size");
 
     /* The pending table: token match, response opcode match, basic result, event, timeout. */
     AprPending p;
@@ -450,6 +467,17 @@ static void test_decode_and_pending(void)
     check(apr_decode(buf, 28, &m) == AprOk, "decode basic result");
     check(apr_pending_reply(&p, &m, &request, &status) == AprPResult, "a basic result closes its request");
     check(request == APR_OP_AFE_SVC_SET_PARAM && status == 2, "and reports the DSP status");
+    check(p.errors == 1 && p.answers == 2, "a non-zero status is the error q6afe.c:1090 says it is");
+
+    /* The same command answered with status 0. q6afe.c:1080-1097 treats only payload[1] != 0 as a failure, so a zero
+     * is the DSP accepting the command and has to be counted as an answer; the board's clock gate answers exactly this. */
+    const uint32_t answers0 = p.answers, errors0 = p.errors;
+    const uint32_t t_gain = apr_pending_add(&p, APR_OP_AFE_SVC_SET_PARAM, APR_OP_BASIC_RESULT);
+    put_le32(buf, APR_HEADER_BYTES + 4, 0);
+    check(apr_decode(buf, 28, &m) == AprOk, "decode the accepted basic result");
+    check(apr_pending_reply(&p, &m, &request, &status) == AprPResult, "a zero status still closes the request");
+    check(t_gain != 0 && status == 0 && p.errors == errors0 && p.answers == answers0 + 1,
+          "and lands in the answers, not the errors");
 
     /* Something for nobody: counted, slot count unchanged. */
     put_le32(buf, 12, 4242);
