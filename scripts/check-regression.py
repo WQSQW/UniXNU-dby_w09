@@ -13,6 +13,7 @@ import hashlib
 import json
 import re
 import subprocess
+import tempfile
 import sys
 from pathlib import Path
 
@@ -62,6 +63,49 @@ DEVICE_ROWS = [
     "DbyBattery: icl holding want=", "DbyBattery: read opcode=", "DbyBattery: write opcode=",
     "DbyBattery: rw channel ppid=", "[apr] os=", "[apr] tr=", "[apr] pa=", "[apr] step=", "[apr] copp=",
 ]
+
+
+CARRIER_KEYS = ("trust_cache_sha256", "gpu_addon_sha256", "data_ramdisk_sha256")
+ADT_IN_ESP = "::/EFI/UniXNU/Payloads/kernel.macho.adt"
+
+
+def adt_from_esp(image):
+    """The device tree the firmware hands XNU, read out of the ESP image with mtools: no root, no loop
+    mount. Verified by extracting payload-ord203.img's ADT and getting the digest the baseline pins."""
+    with tempfile.TemporaryDirectory() as td:
+        dst = Path(td) / "kernel.macho.adt"
+        p = subprocess.run(["mcopy", "-n", "-o", "-i", str(image), ADT_IN_ESP, str(dst)],
+                           capture_output=True, text=True)
+        return dst.read_bytes() if p.returncode == 0 and dst.is_file() else None
+
+
+def diff_runs(a, b):
+    """Byte runs where two same-length blobs disagree, so a check can name what moved instead of a hash."""
+    runs, prev = [], None
+    for i in range(min(len(a), len(b))):
+        if a[i] != b[i]:
+            if prev is not None and i == prev[1]:
+                prev = (prev[0], i + 1)
+            else:
+                if prev is not None:
+                    runs.append(prev)
+                prev = (i, i + 1)
+    if prev:
+        runs.append(prev)
+    return runs
+
+
+def adt_ok(flash, ref):
+    """Everything of the accepted ADT must still be there; only the 64-byte /chosen random-seed may differ."""
+    if len(flash) != len(ref):
+        return False, f"长度 {len(flash)} != {len(ref)}"
+    runs = diff_runs(flash, ref)
+    if len(runs) > 1:
+        return False, f"{len(runs)} 段差异 {runs[:3]}"
+    for s, e in runs:
+        if e - s != 64 or b"random-seed" not in ref[max(0, s - 64):s]:
+            return False, f"差异段 {s}..{e} 不是 /chosen random-seed"
+    return True, f"{len(runs)} 段（random-seed）{runs}"
 
 
 def out_line(name, ok, detail):
@@ -173,12 +217,27 @@ def main():
         results.append((True, "基线之后的新增参数（提示，不拦）", ",".join(added)))
 
     # ---- 5. payload inputs: a silent swap of seed/addon/trust cache is a capability loss ----
-    if base_doc.get("inputs"):
-        for key, old in base_doc["inputs"].items():
-            note(rec.get(key) == old, f"payload 输入 {key} 与基线一致", f"{str(rec.get(key))[:16]}")
-    else:
-        for key in ("trust_cache_sha256", "gpu_addon_sha256", "data_ramdisk_sha256"):
+    # adt_sha256 is deliberately not pinned: /chosen/random-seed is os.urandom(64) (devicetree.py:308), so
+    # two builds of the identical carriers hash differently (measured: 7d836064 vs 4e32cedd). The ADT is
+    # checked as bytes in 5b, against the accepted boot, which is both reproducible and stricter.
+    for key, old in base_doc.get("inputs", {}).items():
+        if key == "adt_sha256":
+            continue
+        note(rec.get(key) == old, f"payload 输入 {key} 与基线一致", f"{str(rec.get(key))[:16]}")
+    if not base_doc.get("inputs"):
+        for key in CARRIER_KEYS:
             note(key in rec, f"payload 输入 {key} 已记录", str(rec.get(key, ""))[:16])
+
+    # ---- 5b. the device tree in the image, field by field against the accepted boot ----
+    flash_adt = adt_from_esp(pi)
+    note(flash_adt is not None, "从将刷镜像取出 kernel.macho.adt", str(rec.get("adt_sha256"))[:16])
+    ref_name = str(base_doc.get("adt_reference") or "")
+    if flash_adt is not None and ref_name:
+        ref_path = Path(__file__).resolve().parent / ref_name
+        note(ref_path.is_file(), "基线存有已验收 ADT 参照", ref_name)
+        if ref_path.is_file():
+            ok, why = adt_ok(flash_adt, ref_path.read_bytes())
+            note(ok, "ADT 与已验收启动只差 /chosen random-seed", why)
 
     # ---- 6. no live source restored wholesale from one of its own .bak snapshots ----
     comparisons = 0
@@ -209,11 +268,15 @@ def main():
             print("baseline NOT written: the artifact is red, pinning it would accept the regression")
             print("REGRESSION_GATE=1")
             return 1
+        ref_path = Path(__file__).resolve().parent / "regression-baseline-adt.adt"
+        if flash_adt:
+            ref_path.write_bytes(flash_adt)
         Path(a.baseline).write_text(json.dumps({
             "markers": markers,
             "args": shipped,
-            "inputs": {k: rec[k] for k in ("trust_cache_sha256", "gpu_addon_sha256",
-                                           "data_ramdisk_sha256", "adt_sha256") if k in rec},
+            "inputs": {k: rec[k] for k in CARRIER_KEYS if k in rec},
+            "adt_reference": ref_path.name,
+            "adt_sha256_of_this_build": rec.get("adt_sha256"),
             "kernel_sha256": ksha,
             "note": "accepted by device observation on 2026-11-08 (ord203): lock screen, charging "
                     "badge, touch, brightness, interface size, audio path all working",

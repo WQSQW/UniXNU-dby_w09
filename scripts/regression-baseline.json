@@ -67,11 +67,12 @@
     "qcom-usb-debug=1"
   ],
   "inputs": {
-    "trust_cache_sha256": "41bbb090f2dc12a28d150428d48ae57e0cfc5dff1936f7af8ba203cccd7b43be",
-    "gpu_addon_sha256": "387738e4fd97a7cd31796faf6803e40b7946afd583577b3786833a3ff2c8ff5e",
-    "data_ramdisk_sha256": "c6cca30b4025dad1968eba61fdefd2f56fbd870c2cd923015f3834fdfda0118f",
-    "adt_sha256": "e91c7e803a16bdd760d595fb1363f882efac78299f292597ce8a1e34f01a5d07"
+    "trust_cache_sha256": "400d5667de0da4644cc042c2d62b369f0eb00fadfaed47e79db8f655046aa63e",
+    "gpu_addon_sha256": "a267725cd48bf899b2367228bbd1907048243378b8da4d113c3e4c46e08762be",
+    "data_ramdisk_sha256": "423d4000d4d9de1f386b811ad96aa618c303c6c328752e0255e7254761937ff5"
   },
   "kernel_sha256": "51612374a69d1227696fd6f9f201c93ab7b15e0728ba37082d2e0a11ece93e9e",
-  "note": "accepted by device observation on 2026-11-08 (ord203): lock screen, charging badge, touch, brightness, interface size, audio path all working"
+  "note": "accepted by device observation on 2026-11-08 (ord203): lock screen, charging badge, touch, brightness, interface size, audio path all working; the three payload carriers were re-recorded on 2026-11-09 for the CI run 42504049040 delivery, whose plug-in answers kAudioDeviceTransportTypeThunderbolt (CDHash 429e404c5299306ac79128c9f27764925efab8dc), and its ADT is byte-equal to the accepted boot's except /chosen random-seed",
+  "adt_reference": "regression-baseline-adt.adt",
+  "adt_sha256_note": "pinned as bytes in scripts/regression-baseline-adt.adt instead of a digest: /chosen/random-seed is os.urandom(64), so adt_sha256 of the accepted boot (e91c7e803a16bdd7) is not reproducible -- two builds of identical carriers gave 4e32ceddde6dc8a3 and 7d836064183b222c, one 64-byte run apart"
 }
