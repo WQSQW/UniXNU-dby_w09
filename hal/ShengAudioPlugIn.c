@@ -273,14 +273,17 @@ static OSStatus propertyData(AudioObjectID o, const AudioObjectPropertyAddress *
         case 'auto': REPLY(UInt32, 0);
         case kAudioObjectPropertyElementName: REPLY_STR("");
         case kAudioDevicePropertyConfigurationApplication: REPLY_STR("com.apple.Preferences");
-        // The transport type is the classification knob, and this board has measured both settings. Built-in is what this hardware is and
-        // what the sheng plug-in this one descends from ships (its own transport case answers BuiltIn): under
-        // kAudioDeviceTransportTypeBuiltIn the audio server opened the device and streamed through it (opens=1, played=1548288 frames,
-        // late=0, holes=0) but never moved its volume (volume_sets=0); Thunderbolt keeps the slider alive through the control object
-        // (ord199/ord200, sets=1) and lists the device as an external one. The empty unknown-property ring under built-in only proves the
-        // server refused nothing from this plug-in -- it does not say what the server did instead, and the trace ring that would say it has
-        // never been printed until the kernel grew traceRow(). Built-in stays, and those rows decide the next move.
-        case kAudioDevicePropertyTransportType: REPLY(UInt32, kAudioDeviceTransportTypeBuiltIn);
+        // The transport type is the classification knob, and this value is the official one, not an inference of ours: the sheng
+        // plug-in this one descends from answers kAudioDeviceTransportTypeThunderbolt at hal/ShengAudioPlugIn.c:279 and says why on
+        // the lines directly above it -- "Thunderbolt: the audio server's routing layer makes a device of this transport a driver
+        // device with one output and one input port of its own. Built-in devices are only used through Apple's port descriptions,
+        // and a USB device must carry a USB location ('lcID') that the HAL does not take from a plug-in (i529)". That file's volume
+        // ladder is byte-for-byte the one below (its :170-182 set, its :353-369 control object), so the official delivery is this
+        // transport plus this control and nothing else. Our own two boots rank the same way: here the audio server wrote this
+        // device's volume (os=1000 want=0 sets=0 at boot, then os=225 want=3 sets=1 and sets=1 played=3653632 late=0, i.e. 1000 to
+        // 225 milli through the AudioVolumeControl); on built-in it streamed and never moved it (ord203: opens=1, played=1429504,
+        // late=0, holes=0, volume_sets=0).
+        case kAudioDevicePropertyTransportType: REPLY(UInt32, kAudioDeviceTransportTypeThunderbolt);
         case kAudioDevicePropertyRelatedDevices: REPLY(AudioObjectID, kDevice);
         case kAudioDevicePropertyClockDomain: REPLY(UInt32, 0);
         case kAudioDevicePropertyDeviceIsAlive: REPLY(UInt32, 1);

@@ -454,13 +454,12 @@ void unknownRow() {
     if (n > gAudio.unknownSeen) gAudio.unknownSeen = n < SHENG_AUDIO_DIAG_SLOTS ? n : SHENG_AUDIO_DIAG_SLOTS;
 }
 
-// [apr] tr=: what the plug-in put in the trace ring since the last line, which nothing has ever printed. The ring is the audio server's own
+// [apr] tr=: what the plug-in put in the trace ring since the last line. The ring is the audio server's own
 // traffic rather than ours: kind 0 a property read it asked for, 1 a property write, 4 a call of its own that failed on an object that is not
 // ours and so never reached a method of this bundle, and 8 a C++ throw inside the routing layer, whose selector word is that thrower's offset
 // in its own image. The object is the low byte of the id and the scope only its first character, because that is all the ring carries; a
 // selector that is not four printable bytes is an offset and reads only as the hex. This is the readout that names what the built-in path
-// asks for, as opposed to what it answers: the classification boot of ord198 streamed through the device with an empty unknown ring, which
-// says the server asked this plug-in nothing -- so either it addressed another object, which kind 4 shows, or it threw, which kind 8 shows.
+// asks for, as opposed to what it answers.
 void traceRow() {
     if (!gAudio.ctl) return;
     const ShengAudioTrace *t = reinterpret_cast<const ShengAudioTrace *>(reinterpret_cast<const uint8_t *>(gAudio.ctl) +
@@ -471,7 +470,6 @@ void traceRow() {
         // The plug-in packs the word as object in the top byte, the first byte of the scope under it, the kind in the low half and the
         // failure in bit 1, which no kind it uses occupies.
         const uint32_t kind = w & 0xfffeu;
-        if (kind == 0) continue;    // kind 0 is a property read, and a refused read already has its own unk= line
         char text[5] = {'?', '?', '?', '?', 0};
         for (unsigned b = 0; b < 4; ++b) {
             const uint32_t c = s >> (24 - 8 * b);
@@ -480,8 +478,13 @@ void traceRow() {
         const uint32_t sc = (w >> 16) & 0xff;
         // The selector word is a fourcc for a call and an image offset for a throw, so both spellings print: the letters read as a
         // property, the hex reads as a symbol address.
-        kprintf("[apr] tr=%u %s:%08x obj=%u sc=%c kind=%u%s\n", i, text, s, (unsigned)(w >> 24) & 0xff,
-                sc >= 0x20 && sc < 0x7f ? (char)sc : '-', kind, (w & 2u) ? " failed" : "");
+        // Kind 0 is printed after all. Skipping it was the mistake that cost the classification its evidence: kind 0 is a property read
+        // the audio server made of an object this plug-in answers, and unk= only ever held the reads that were refused. ord203 streamed
+        // for a whole boot under built-in with an empty unk= ring and volume_sets=0, and the 65 rows the ring actually held -- the ones
+        // naming what the server asked, which is the question -- were in slots 0..41 and never reached the console.
+        const char *act = kind == 0 ? "get" : kind == 1 ? "set" : kind == 4 ? "call" : kind == 8 ? "throw" : "other";
+        kprintf("[apr] tr=%u %s:%08x obj=%u sc=%c %s%s\n", i, text, s, (unsigned)(w >> 24) & 0xff,
+                sc >= 0x20 && sc < 0x7f ? (char)sc : '-', act, (w & 2u) ? " failed" : "");
     }
     if (n > gAudio.traceSeen) gAudio.traceSeen = n < SHENG_AUDIO_TRACE_SLOTS ? n : SHENG_AUDIO_TRACE_SLOTS;
 }
