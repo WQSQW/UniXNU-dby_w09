@@ -260,11 +260,11 @@ static OSStatus propertyData(AudioObjectID o, const AudioObjectPropertyAddress *
         case kAudioObjectPropertyBaseClass: REPLY(AudioClassID, kAudioObjectClassID);
         case kAudioObjectPropertyClass: REPLY(AudioClassID, kAudioDeviceClassID);
         case kAudioObjectPropertyOwner: REPLY(AudioObjectID, kPlugIn);
-        case kAudioObjectPropertyName: REPLY_STR("Speaker");
+        case kAudioObjectPropertyName: REPLY_STR("MatePad Speaker");
         case kAudioObjectPropertyManufacturer: REPLY_STR("UniXNU");
         case kAudioDevicePropertyDeviceUID: REPLY_STR(kDeviceUID);
         case kAudioDevicePropertyModelUID: REPLY_STR(kModelUID);
-        case kAudioObjectPropertyModelName: REPLY_STR("Speaker");
+        case kAudioObjectPropertyModelName: REPLY_STR("MatePad Speaker");
         case kAudioObjectPropertySerialNumber: REPLY_STR("0001");
         case kAudioObjectPropertyFirmwareVersion: REPLY_STR("1.0");
         case kAudioObjectPropertyIdentify: REPLY(UInt32, 0);
@@ -273,11 +273,13 @@ static OSStatus propertyData(AudioObjectID o, const AudioObjectPropertyAddress *
         case 'auto': REPLY(UInt32, 0);
         case kAudioObjectPropertyElementName: REPLY_STR("");
         case kAudioDevicePropertyConfigurationApplication: REPLY_STR("com.apple.Preferences");
-        // This is the tablet's own loudspeaker, so it is classified as the built-in device: the transport type is what the routing layer
-        // keys a device's class on, and anything but 'built' (Thunderbolt earlier) makes it show the plug-in's own name verbatim in the
-        // route list instead of the system's built-in speaker. Whatever this costs -- Apple's port descriptions, a flag we do not answer --
-        // the audio server names it in the unknown-property log above, so the next boot says exactly what a built-in device still needs.
-        case kAudioDevicePropertyTransportType: REPLY(UInt32, kAudioDeviceTransportTypeBuiltIn);
+        // The transport type is the classification knob and this board measured both settings. Built-in costs the control path: with
+        // kAudioDeviceTransportTypeBuiltIn the audio server opened this device and streamed through it (opens=1, played=1548288 frames,
+        // late=0, holes=0) yet never set its volume (volume_sets=0) and never asked a property the plug-in refuses (the unknown-property
+        // ring stayed empty), because a built-in device is controlled through Apple's port descriptions, which a HAL plug-in does not
+        // vend: docs/devices/sheng.md:461 says iOS sees a plug-in device only with this transport, and the EVB10 board plays with the
+        // volume applied on it. The name two cases above is what the route list shows verbatim here, so it says what this is.
+        case kAudioDevicePropertyTransportType: REPLY(UInt32, kAudioDeviceTransportTypeThunderbolt);
         case kAudioDevicePropertyRelatedDevices: REPLY(AudioObjectID, kDevice);
         case kAudioDevicePropertyClockDomain: REPLY(UInt32, 0);
         case kAudioDevicePropertyDeviceIsAlive: REPLY(UInt32, 1);
