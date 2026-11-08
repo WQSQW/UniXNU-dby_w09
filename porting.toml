@@ -314,14 +314,14 @@ result = "PASS qrtr and service locator: 41 checks"
 kind = "device"
 reference = "hal/ShengAudioPlugIn.c"
 command = "boot of payload-ord198.img (preload, payload_sha256 7fa555d782a1cd761369ee4189af529b68ae1c6dfe2bb37dd3b51a402db16a20), COM4 read for 45 s at 2026-11-08 20:38 with DTR/RTS set after the boot"
-revision = "52682b2"
+revision = "52682b2dce38d1cc95893dd7debc53b9fbbeba51"
 result = "FAIL the built-in classification gives the volume slider nothing to talk to: [apr] os=1000 want=0 sets=0 opens=1 maps=3 played=1548288 late=0 holes=0, and no [apr] unk= row at all, so the audio server streamed through the plug-in device without ever setting its volume or asking a property it refused. No panic: one kprintf initialized and one Firehose line in the replayed ring, DbyBattery #1 to #53 in the same boot"
 
 [[area.evidence]]
 kind = "device"
 reference = "porting.toml"
 command = "the same boot on the PC's USB port, then the same image on a wall charger"
-revision = "52682b2"
+revision = "52682b2dce38d1cc95893dd7debc53b9fbbeba51"
 result = "the panel flicker that starts at the Apple logo is the supply, not board code: on the computer port the fuel gauge answers soc=0 mv=2816 with the input limit at 500 mA (icl=500 want=500 ceiling=500 aicl0=500) and the tablet later drops off the USB bus entirely with no panic row on the console, which is a power loss and not a hang; on a wall charger the same image boots without flicker, so no display or backlight code was touched (dby-bl=1 stays)"
 
 [[area.evidence]]
