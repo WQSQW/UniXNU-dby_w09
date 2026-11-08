@@ -117,15 +117,9 @@ constexpr uint64_t kSidTag = (uint64_t)(kLpassSid & 0xf) << 32;
 constexpr uint32_t kRingFrames = SHENG_AUDIO_RING_FRAMES;         // 65536 frames, 1.37 s
 constexpr uint32_t kAbiOutChannels = SHENG_AUDIO_OUT_CHANNELS;    // 2 from the audio server, 4 slots to the TDM port
 
-// One period of a sine, sampled at 48 kHz with 64 samples per period: 750 Hz exactly, no drift across regions because the index
-// keeps counting. The values are round(8000 * sin(2*pi*i/64)); the peak stays well under the 32767 that a 16-bit sample holds.
-constexpr uint32_t kToneSteps = 64;
-constexpr int16_t kTone[kToneSteps] = {
-    0, 784, 1561, 2322, 3061, 3771, 4445, 5075, 5657, 6184, 6652, 7055, 7391, 7656, 7846, 7961,
-    8000, 7961, 7846, 7656, 7391, 7055, 6652, 6184, 5657, 5075, 4445, 3771, 3061, 2322, 1561, 784,
-    0, -784, -1561, -2322, -3061, -3771, -4445, -5075, -5657, -6184, -6652, -7055, -7391, -7656, -7846, -7961,
-    -8000, -7961, -7846, -7656, -7391, -7055, -6652, -6184, -5657, -5075, -4445, -3771, -3061, -2322, -1561, -784,
-};
+// How far behind the plug-in's write cursor the pump plays: the 300 ms this page itself publishes as lead_frames, which is the
+// distance the audio server was told to keep between its own write and the position the speaker reads.
+constexpr uint64_t kRingLagFrames = 30ull * SHENG_AUDIO_PERIOD_FRAMES;
 
 enum {
     StStarted = 1, StChannel = 2, StUp = 3, StVersion = 4, StCore = 5, StPads = 6, StClock = 7, StTdm = 8, StSlots = 9, StPort = 10,
@@ -155,9 +149,11 @@ struct Audio {
     uint8_t *pcmVa;
     uint64_t pcmPa;
     uint32_t memHandle;
+    uint64_t playAt;                                           // mach_absolute_time at the moment the ladder reached the stream
+    uint32_t doneErr;                                          // write-done events the DSP returned with a non-zero status
     uint16_t coppId;       // what the ADM open answer reported for the TDM COPP; the matrix map routes to this, not to a port id
     uint32_t busyMask;     // one bit per region while the DSP still holds it
-    uint32_t toneIndex, filled, completed;
+    uint32_t filled, completed;
     uint32_t afeApi, admApi, asmApi;                           // what the AVCS version answer reported
     uint16_t volumeQ13;                                        // the ASM soft volume's linear Q13 master gain
     // the control page and the two rings the audio server's plug-in maps (memory types 0, 1 and 2)
@@ -167,6 +163,9 @@ struct Audio {
     volatile uint32_t serving;                                 // 1 once the service is published and the rings may be handed out
     volatile uint32_t want;                                    // the plug-in's start and stop requests, as ShengAudio*Running bits
     uint64_t issued;                                           // regions handed to the DSP: the timeline frame is issued * kPeriodFrames
+    int64_t ringBase;                                          // phase between our region count and the plug-in's write cursor
+    uint64_t ringGap;                                          // written - read, what the two cursors were apart on the last take
+    uint32_t resync, resyncRow;                                // times that phase was re-locked, and what the row already said
     uint32_t volumeMilli, volumeSets;                          // the slider the plug-in recorded, and how often the audio server moved it
     uint32_t late, holes;                                      // regions taken before the plug-in wrote them, and those that held a 64-frame run of silence
     uint32_t lastRow;                                          // what the last [apr] os= line said, so the row only appears when it changes
@@ -560,11 +559,18 @@ void serviceRow() {
     gAudio.volumeMilli = d->volume_milli;
     gAudio.volumeSets = d->volume_sets;
     const uint32_t key = (gAudio.volumeMilli << 4) | (gAudio.want & 15u);
-    if (key == gAudio.lastRow) return;
+    if (key == gAudio.lastRow && gAudio.resync == gAudio.resyncRow) return;
     gAudio.lastRow = key;
-    kprintf("[apr] os=%u want=%u sets=%u opens=%d maps=%d played=%u late=%u holes=%u\n", gAudio.volumeMilli, gAudio.want,
+    gAudio.resyncRow = gAudio.resync;
+    // peak= is the loudest |sample| the pump has ever taken out of the ring (x 32767, notePeak), wrot= the audio server's own write
+    // cursor in frames. Together they answer the question played= cannot: whether any client reached the speaker's ring at all.
+    kprintf("[apr] os=%u want=%u sets=%u opens=%d maps=%d played=%u late=%u holes=%u peak=%u wrot=%u resync=%u gap=%u derr=%u\n",
+            gAudio.volumeMilli, gAudio.want,
             gAudio.volumeSets, native_audio_service[1], native_audio_service[5],
-            (unsigned)(gAudio.completed * kPeriodFrames), gAudio.late, gAudio.holes);
+            (unsigned)(gAudio.completed * kPeriodFrames), gAudio.late, gAudio.holes,
+            (unsigned)native_audio_service[7] & 0xffffu,
+            gAudio.ctl ? (unsigned)gAudio.ctl->out_written : 0u,
+            gAudio.resync, (unsigned)gAudio.ringGap, gAudio.doneErr);
 }
 
 // Fills one free region with the tone and asks the DSP to play it. The write is not a waited command: q6asm_write sends it with
@@ -576,28 +582,53 @@ void issueWrite() {
         if (region >= kRegions) return;                       // every region is still held by the DSP
         if (!(gAudio.busyMask & (1u << region))) break;
     }
-    int16_t *samples = reinterpret_cast<int16_t *>(gAudio.pcmVa + (uint64_t)region * kRegionBytes);
-    // Three sources, in the order the path comes up: before the service is published the boot tone is the audible proof that the ladder
-    // carries samples; after it the ring is the source while the audio server has output running, and a stopped stream plays silence
-    // rather than a tone nobody asked for.
-    const uint64_t start = gAudio.issued * kPeriodFrames;
-    if (gAudio.serving && (gAudio.want & ShengAudioOutputRunning)) { takeRing(samples, start); watchRing(start, samples); }
-    else if (gAudio.serving) memset(samples, 0, kRegionBytes);
-    else {
-        for (uint32_t i = 0; i < kPeriodFrames; ++i) {
-            const int16_t value = kTone[gAudio.toneIndex & (kToneSteps - 1)];
-            gAudio.toneIndex++;
-            for (uint32_t c = 0; c < kChannels; ++c) samples[i * kChannels + c] = value;
+    // The vendor feeder has no rate limit of its own: q6asm-dai.c:194-202 hands a buffer over on every write-done and trusts the
+    // DSP to hold it until it has played it. ord208 measured what happens when it does not -- 44x the rate the stream can eat. The
+    // cap uses the same contract the audio server is given (ticks_per_frame_q32, 400 host ticks per frame here) and leaves the four
+    // regions legitimately in flight outside of it, so a DSP that holds buffers never sees it.
+    if (gAudio.playAt) {
+        const uint64_t per = gAudio.ctl ? (gAudio.ctl->ticks_per_frame_q32 >> 32) : 0;
+        if (per) {
+            const uint64_t due = (mach_absolute_time() - gAudio.playAt) / per;
+            if ((uint64_t)gAudio.issued * kPeriodFrames > due + (uint64_t)kRegions * kPeriodFrames) return;
         }
     }
+    int16_t *samples = reinterpret_cast<int16_t *>(gAudio.pcmVa + (uint64_t)region * kRegionBytes);
+    // Two sources: the ring while the audio server has output running, and silence for a stream it stopped. The boot tone that used to
+    // be the third is retired -- ord206 answered the question it was there for, and it had been covering the ring for the first 94
+    // regions of every boot.
+    // The read position is the plug-in's timeline, not our region count. issued starts at the moment the ladder finished, while
+    // out_written is a frame position on the timeline the control page anchored at boot. ord206 measured the two apart at the very
+    // first client write -- the cursor was at 4426164 frames, ours at 3727360 -- so 14.6 s, ten turns of a 1.37 s ring, had been
+    // cleared unread, and the gap kept growing while a client was stopped. ringBase carries the phase so a take lands where the
+    // write landed, one lead behind the cursor; watchRing's late gate then finally measures what it was written to measure.
+    const bool fromRing = gAudio.serving && (gAudio.want & ShengAudioOutputRunning);
+    uint64_t start = 0;
+    if (fromRing) {
+        const uint64_t own = gAudio.issued * kPeriodFrames;
+        const uint64_t written = gAudio.ctl ? gAudio.ctl->out_written : 0;
+        const uint64_t target = written > kRingLagFrames ? written - kRingLagFrames : 0;
+        const int64_t skew = (int64_t)(target - (own + (uint64_t)gAudio.ringBase));
+        if (skew > (int64_t)kRingFrames / 2 || skew < -(int64_t)kRingFrames / 2) {
+            gAudio.ringBase += skew;                   // the producer moved further than the ring can hold: follow it
+            gAudio.resync++;
+        }
+        start = own + (uint64_t)gAudio.ringBase;
+        gAudio.ringGap = (uint64_t)((int64_t)written - (int64_t)start);
+        takeRing(samples, start);
+        watchRing(start, samples);
+    } else memset(samples, 0, kRegionBytes);
     gAudio.issued++;
     cleanToPoc(gAudio.pcmVa + (uint64_t)region * kRegionBytes, kRegionBytes);
     const uint32_t token = apr_asm_token(kSession, kStream, (uint8_t)region, ASM_TOKEN_NO_WAIT);
-    // seq_id is the buffer index, not a running count (q6asm.c: write.seq_id = port->dsp_buf), and the flags field the DSP sees is
-    // 0x80000000 | the driver's flag, so a plain PCM write with no timestamp carries bit 31 set and nothing else (:9693-9699).
+    // seq_id is the buffer index, not a running count (q6asm.c: write.seq_id = port->dsp_buf). The flags field is the part this
+    // ladder got wrong for eight rounds: bit 31 is the timestamp-valid claim (apr_audio-v2.h:7214), and a PCM stream with no
+    // session time is written the way q6asm.c:9693-9699 writes it -- the driver's NO_TIMESTAMP, which the encoder turns into
+    // 0x0000FF00. Setting bit 31 and leaving the timestamp at zero told the ADSP every buffer was due at 0 us, and it returned
+    // them all unrung: ord208's 44x write-done rate and the silence were that, not a starved pump.
     const uint32_t n = apr_asm_write(packet, sizeof packet, token, kSession, kStream,
                                      (gAudio.pcmPa + (uint64_t)region * kRegionBytes) | kSidTag,
-                                     gAudio.memHandle, kRegionBytes, region, 0, 0x80000000u);
+                                     gAudio.memHandle, kRegionBytes, region, 0, APR_ASM_NO_TIMESTAMP);
     if (!n) {failed(StPlaying); gAudio.pace->cancelTimeout(); return;}
     if (sheng_adsp_send(gAudio.channel, packet, n)) bump(12);
     gAudio.busyMask |= 1u << region;
@@ -623,6 +654,7 @@ void advance() {
         if (kLadder[gAudio.step].level <= (int)gAudio.level) break;
     if (gAudio.step >= (int)kSteps) {                       // the ladder is done: start the stream
         native_audio_stats[0] = StPlaying;
+        gAudio.playAt = mach_absolute_time();
         // The vendor unmutes the amplifiers after the stream exists, so this is the point where their on-scene belongs; counted on
         // its own line so one flash answers the slot-geometry question and the amplifier-drive question separately.
         kprintf("[apr] pa=%u\n", dby_smartpa_play());
@@ -771,6 +803,12 @@ void inboxFired(OSObject *, IOInterruptEventSource *, int) {
             if (doneRegion < kRegions && (gAudio.busyMask & (1u << doneRegion))) {
                 gAudio.busyMask &= ~(1u << doneRegion);
                 gAudio.completed++;
+                if (doneStatus) gAudio.doneErr++;
+                // Write again the moment the DSP returns a buffer, the way the vendor feeder writes when its own wake fires. The pace
+                // timer cannot do this job on rate alone: ord207 measured two rows where the plug-in's cursor had advanced 218112
+                // frames and the pump had issued 184320 -- the 0.845 that four regions per 100 ms is against the 48 kHz the ASM eats.
+                // A round holds 85 ms of sound and the tick is 100 ms, so 15 % of every round was missing by construction.
+                if (gAudio.step >= (int)kSteps && gAudio.pcmVa) issueWrite();
             }
             record();
             continue;

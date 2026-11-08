@@ -157,6 +157,7 @@ enum {AprSvcAdspCore = 3, AprSvcAfe = 4, AprSvcAsm = 7, AprSvcAdm = 8};
  * write-done event is attributed to a buffer by reading it back, not from the payload (:2203). */
 #define ASM_TOKEN_DIR_OUT 1u                         /* ASM_DIRECTION_OFFSET */
 #define ASM_TOKEN_NO_WAIT 2u                         /* ASM_CMD_NO_WAIT_OFFSET */
+#define APR_ASM_NO_TIMESTAMP 0xFF00u                 /* NO_TIMESTAMP (q6asm-v2.h:92), the value the vendor hands q6asm_write */
 uint32_t apr_asm_token(uint8_t session, uint8_t stream_id, uint8_t buf_index, uint32_t flags);
 uint8_t apr_asm_token_buf_index(uint32_t token);
 uint8_t apr_asm_token_stream(uint32_t token);

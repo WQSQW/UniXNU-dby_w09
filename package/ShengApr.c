@@ -399,7 +399,12 @@ uint32_t apr_asm_write(uint8_t *out, uint32_t capacity, uint32_t token, uint8_t 
     Writer w;
     w_init(&w, out + APR_HEADER_BYTES, capacity - APR_HEADER_BYTES);
     if (w32(&w, (uint32_t)buffer) || w32(&w, (uint32_t)(buffer >> 32)) || w32(&w, mem_map_handle) || w32(&w, length)) return 0;
-    if (w32(&w, sequence) || w32(&w, (uint32_t)timestamp) || w32(&w, (uint32_t)(timestamp >> 32)) || w32(&w, flags)) return 0;
+    /* apr_audio-v2.h:7214 puts the meaning of this field's bit 31 in words: "1 -- Valid timestamp",
+     * "0 -- Invalid timestamp". Neither driver sets it for a stream with no session time: q6asm.c:9693-9699 takes the caller's
+     * NO_TIMESTAMP (0xFF00) and writes 0x00000000 | (0xFF00 & 0x800000FF), and mainline q6asm.c:1216-1219 is the same
+     * branch with NO_TIMESTAMP. Only a caller that really supplies a timestamp gets 0x80000000 | flags. */
+    const uint32_t wire = flags == APR_ASM_NO_TIMESTAMP ? (flags & 0x800000FFu) : (0x80000000u | flags);
+    if (w32(&w, sequence) || w32(&w, (uint32_t)timestamp) || w32(&w, (uint32_t)(timestamp >> 32)) || w32(&w, wire)) return 0;
     return finish(out, &w, AprSvcAsm, (uint16_t)((uint16_t)session << 8 | stream_id), token, APR_OP_ASM_WRITE_V2);
 }
 

@@ -100,12 +100,18 @@ def adt_ok(flash, ref):
     if len(flash) != len(ref):
         return False, f"长度 {len(flash)} != {len(ref)}"
     runs = diff_runs(flash, ref)
-    if len(runs) > 1:
-        return False, f"{len(runs)} 段差异 {runs[:3]}"
-    for s, e in runs:
-        if e - s != 64 or b"random-seed" not in ref[max(0, s - 64):s]:
-            return False, f"差异段 {s}..{e} 不是 /chosen random-seed"
-    return True, f"{len(runs)} 段（random-seed）{runs}"
+    if not runs:
+        return True, "逐字节相同"
+    lo, hi = runs[0][0], runs[-1][1]
+    # The contract is that 64-byte value, not one contiguous run: every byte the new draw happens to repeat
+    # splits the diff (measured ord208: [(392, 445), (446, 456)], 63 of the 64 bytes differing, and nothing
+    # outside 392..456 differing at all). Asking for one run is what made an unchanged ADT read as a failure.
+    if hi - lo != 64:
+        return False, f"差异落在 {lo}..{hi} 共 {hi - lo} 字节，不是 /chosen random-seed 的那 64 字节"
+    for name in (ref, flash):
+        if b"random-seed" not in name[max(0, lo - 64):lo]:
+            return False, f"{lo}..{hi} 前面没有 random-seed 属性名"
+    return True, f"{len(runs)} 段（random-seed）{lo}..{hi}，{sum(e - s for s, e in runs)}/64 字节不同"
 
 
 def out_line(name, ok, detail):
