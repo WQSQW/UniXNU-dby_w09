@@ -243,7 +243,7 @@ result = "the [audio] row prints the legacy APR ladder (st, q, ans, status, refu
 
 [[area]]
 id = "audio"
-status = "planned"
+status = "device-verified"
 components = []
 paths = ["package/*Audio*", "package/*Adsp*", "package/*Gpr*", "scripts/*audio*", "scripts/*adsp*", "scripts/*gpr*",
          "package/DbySmartPA*", "package/DbyPaTables.h", "package/GeniI2c*", "hal/*",
@@ -380,6 +380,13 @@ reference = "package/DbyAudio.cpp"
 command = "grep -n 'traceRow' package/DbyAudio.cpp"
 revision = "11650d08c0b6caf87d1eb294715d5d5d7b3a2334"
 result = "two hits, the definition and the call from paceFired(), so the ring the plug-in has filled on every boot of this experiment is read for the first time and its server-side kinds reach the console beside the unk= rows"
+[[area.evidence]]
+kind = "device"
+reference = "package/ShengApr.c"
+command = "host platform-tools fastboot flash preload payload-ord209.img (sha256 592c632b74abcf0d6e13929257fc18976407f7c9203310031e9f65f745d10db3), then COM4 at 115200 with DtrEnable and RtsEnable held by the reader"
+revision = "e392957e512557a4f534167dd707719a789fd52f"
+result = "PASS the built-in speakers sound and the slider follows them: the [apr] rows advance at real time (26.3 s of audio across 21.5 s of wall clock), played= and wrot= stay within 31072 frames (0.6 s) of each other, peak= holds 9787 and late= stays 0, and the 44x write-done spin the same ladder showed one round earlier is gone."
+
 
 [[area]]
 id = "power"
