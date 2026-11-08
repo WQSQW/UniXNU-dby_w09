@@ -7,11 +7,16 @@
 
 # SM8250 / kona 共享硬件描述：dts/sm8250.dtsi、configs/sm8250.config、patches/xnu/series。
 # [board] soc_source = "sm8250" 指的就是这条。
+# a6e7e36 是官方同 SoC 板 alioth 钉的那一条，比原来的 6bb9b02 多两样本板要用、
+# 且只能由 SoC 层拥有的东西：patches/xnu/series 里的 native-smp-secondary +
+# native-smp-type-clusters（多核与 E/P 大小核的内核侧），和 kits/Sm8250Platform 的
+# A650 GMU 源码与 sm8250.dtsi 里 status = "disabled" 的 gpu/gmu/gpu_smmu 节点。
+# 换 pin 前这两份补丁是本板 device series 用 arch: 代管的（见 patches/xnu/series）。
 [[source]]
 name = "sm8250"
 kind = "soc"
 git = "https://github.com/FFT-infra/UniXNU-sm8250-common"
-commit = "6bb9b025704764a662728dce1a30557a35e082d8"
+commit = "a6e7e36caab58f5b9a5625dbdb8da2bf290fa5cc"
 
 # 官方目录里的 ShengUfs 是 SM8550 范围的（hardware = ["SM8550 UFS controller"]、
 # board_dependencies 里写死 SM8550 clocks/SMMU），本板要的是同一驱动里带
@@ -22,3 +27,20 @@ name = "ShengUfs"
 kind = "driver"
 git = "https://github.com/FFT-infra/NativeUfs-alioth"
 commit = "ab5405905a1892da03a9a53e0fa3dcd255d04055"
+
+# ArmCpu：基础目录钉的 UniXNU/ArmCpu@9066b53 把每个核都登记成启动簇的类型
+# （ArmCpu.cpp:402/452 两处都是 info.cluster_type = ml_get_boot_cluster_type()），
+# 也从不调 ml_cpu_init_completed()——本树里唯一的调用点在 AppleARMSMP.cpp:236，而本板的
+# 次核是 ArmCpu 自己拉起来的，走不到那条路。后果是：dts 里写的 unixnu,cluster-type 到不了
+# processor 注册，Edge 调度器也不会建立簇间 edge（不建就没有跨簇迁移和窃取），所以
+# native-smp-type-clusters.patch 单独落地并不能解决「非常卡」。
+# xVanTuring/ArmCpu@a9c4585 这支持有：clusterType() 读 topology->cpus[cpu].cluster_type、
+# 全部核注册完后调 ml_cpu_init_completed()，并把 SPI IPI 的 INTID 基址改为按 GICD_TYPER 推
+# （固定 1008 只是 sheng 的写法）。官方同 SoC 板 alioth 的 feeds.toml 正是这么钉的，
+# 它的 cpu 记录给出真机证据：每进程 c0..c7 都有计数、P 簇承担数倍于 E 簇的负载。
+# 换源前已核对：本板 package/kits/scripts 引用的 19 个 armcpu_* 符号在这支里全部存在。
+[[source]]
+name = "ArmCpu"
+kind = "driver"
+git = "https://github.com/xVanTuring/ArmCpu"
+commit = "a9c4585dbb1b75b8594dd0ae54962cc59969d98f"

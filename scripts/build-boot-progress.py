@@ -109,12 +109,19 @@ for probe_name in ('BootProcessProbe.c', 'BootUiTraceProbe.c'):
     probe_objs.append(str(probe_obj))
 
 
+# The firmware file reader of the audio DSP bring-up (AdspProbe.cpp) uses the VFS too.
+fw_source = ROOT / 'kits/dby_w09/AdspFirmware.c'
+fw_obj = OUT / 'AdspFirmware.o'
+fw_command = [str(fw_source) if arg == str(policy_source) else str(fw_obj) if arg == str(policy_obj) else arg for arg in policy_command]
+subprocess.run(fw_command, cwd=policy_record['directory'], check=True, timeout=90)
+
 archive = OUT / 'libBootProgress.a'
 archive.unlink(missing_ok=True)
-subprocess.run(['xcrun', 'ar', 'rcs', str(archive), str(obj), str(fault_obj), str(policy_obj), *probe_objs], check=True, timeout=30)
+subprocess.run(['xcrun', 'ar', 'rcs', str(archive), str(obj), str(fault_obj), str(policy_obj), str(fw_obj), *probe_objs], check=True, timeout=30)
 (OUT / 'build-report.json').write_text(json.dumps({
     'watchdog_policy_sha256': hashlib.sha256(policy_source.read_bytes()).hexdigest(),
     'fault_sha256': hashlib.sha256(fault_source.read_bytes()).hexdigest(),
+    'firmware_reader_sha256': hashlib.sha256(fw_source.read_bytes()).hexdigest(),
     'source_sha256': hashlib.sha256(source.read_bytes()).hexdigest(),
     'lifecycle_sha256': hashlib.sha256((source.parent / 'BootProgressLifecycle.h').read_bytes()).hexdigest(),
     'core_sha256': hashlib.sha256((source.parent / 'BootProgressCore.h').read_bytes()).hexdigest(),

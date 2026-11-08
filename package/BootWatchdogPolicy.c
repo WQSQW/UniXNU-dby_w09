@@ -38,6 +38,28 @@ static int sheng_boot_setup_reset(proc_t p,uint64_t scratch) {
  return 0;
 }
 
+// Data volume full: APFS is copy-on-write, so even rewriting the same bytes needs
+// fresh blocks and fails with ENOSPC. The policy only changes with the boot
+// arguments, so when the file already carries exactly this boot's policy there is
+// nothing to write. Returns 1 only when the on-disk bytes are known to match.
+static int sheng_policy_unmodified(proc_t p,uint64_t scratch) {
+ static char ondisk[768];
+ const char *path="/private/var/db/com.apple.xpc.launchd/disabled.plist";
+ size_t len=strlen(policy);
+ int32_t fd=0,closed=0;user_ssize_t got=0;
+ if(!len || len>=sizeof(ondisk))return 0;
+ if(copyout(path,scratch,strlen(path)+1))return 0;
+ struct open_args ro={.path=scratch,.flags=O_RDONLY|O_NOFOLLOW,.mode=0};
+ if(open(p,&ro,&fd))return 0;
+ struct read_args rd={.fd=fd,.cbuf=scratch+0x300,.nbyte=len+1};
+ int error=read(p,&rd,&got);
+ struct close_args cl={.fd=fd};
+ sys_close(p,&cl,&closed);
+ if(error || got!=(user_ssize_t)len)return 0;
+ if(copyin(scratch+0x300,ondisk,len))return 0;
+ return memcmp(ondisk,policy,len)==0;
+}
+
 int sheng_boot_watchdog_policy(void *process, uint64_t scratch) {
  proc_t p=process;
  int enabled=0,error=0,fd=-1;int32_t result=0;
@@ -75,6 +97,9 @@ int sheng_boot_watchdog_policy(void *process, uint64_t scratch) {
  struct mkdir_args md={.path=scratch,.mode=0755};
  error=mkdir(p,&md,&result);
  if(error && error!=EEXIST)goto done;
+ // Skip the rewrite when the file already holds this boot's policy (the common
+ // case): on a full Data volume the write would only earn an ENOSPC.
+ if(sheng_policy_unmodified(p,scratch)){error=0;goto done;}
  if((error=copyout(path,scratch,strlen(path)+1)))goto done;
  // With persistent Data the previous boot's file is there: this policy is rewritten in place on every boot (it must follow the
  // boot arguments). Symlinks are still refused (O_NOFOLLOW) and the fstat check below insists on a root-owned regular file.
@@ -98,6 +123,9 @@ int sheng_boot_watchdog_policy(void *process, uint64_t scratch) {
  if(st.st_uid!=0 || st.st_gid!=0 || !S_ISREG(st.st_mode) || (st.st_mode&0777)!=0644 || st.st_size!=(off_t)(strlen(policy)))error=EINVAL;
  done:
  if(fd>=0){struct close_args cl={.fd=fd};int e=sys_close(p,&cl,&result);if(!error)error=e;}
+ // A full Data volume must not stop the boot: the file written by an earlier boot
+ // already carries this policy, so launchd still sees it. Report, do not panic.
+ if(error==ENOSPC){printf("sheng watchdog policy: Data volume full (ENOSPC), on-disk policy kept\n");error=0;}
  // A real empty migration marker selects the qualified modern override loader.
  if(!error) {
   const char *marker="/private/var/db/com.apple.xpc.launchd/disabled.migrated";

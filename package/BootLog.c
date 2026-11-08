@@ -843,14 +843,16 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
              native_battery_stats[15]);
     at = put(out, at, cap, row, sizeof row);
   }
-  // Audio framework readiness over the packet router channel (AudioProbe.cpp): stage (5 ready), queries, answers, last status, refusals,
-  // timeouts, ignored packets, ms from channel up to ready, channel ups/downs, last opcode, ring drops, send refusals, mode.
+  // The legacy APR playback ladder over apr_audio_svc (DbyAudio.cpp): the rung reached (positive) or the one it died on (negative),
+  // requests sent, answers, last ADSP status, refusals, answer timeouts, packets matching no request, ms from channel up to the last
+  // rung, channel ups/downs, last opcode, ring drops, transport send refusals, the dby-apr level, PCM regions the DSP gave back and
+  // the memory-map handle it issued for them.
   if (&native_audio_stats && native_audio_stats[0]) {
-    char row[200];
-    snprintf(row, sizeof row, "[audio] st=%d q=%d ans=%d status=%d refused=%d to=%d ign=%d rdy=%dms up=%d down=%d op=%x drop=%d sendfail=%d mode=%d",
+    char row[240];
+    snprintf(row, sizeof row, "[audio] st=%d q=%d ans=%d status=%d refused=%d to=%d ign=%d rdy=%dms up=%d down=%d op=%x drop=%d sendfail=%d lvl=%d done=%d map=%x",
              native_audio_stats[0], native_audio_stats[1], native_audio_stats[2], native_audio_stats[3], native_audio_stats[4], native_audio_stats[5],
              native_audio_stats[6], native_audio_stats[7], native_audio_stats[8], native_audio_stats[9], native_audio_stats[10], native_audio_stats[11],
-             native_audio_stats[12], native_audio_stats[13]);
+             native_audio_stats[12], native_audio_stats[13], native_audio_stats[14], native_audio_stats[15]);
     at = put(out, at, cap, row, sizeof row);
   }
   // Touch strokes as the digitizer published them, in this panel's own pixels: where each finger came down and lifted, how long and

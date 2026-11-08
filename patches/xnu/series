@@ -1,30 +1,30 @@
 # Device patch paths, one per line in application order.
 #
-# Two core patches are named by neither the ARM64 nor the OS series, and the
-# official records say they must still be present:
-# docs/xnu/patch-reference.md lists native-smp-secondary under "Platform and
-# CPU", and docs/.vitepress/device-records/sirius.toml records for sdm710 that
-# "the ARM64 and OS series assume the two files they omit are present ... Both
-# now live in the sdm710 SoC series, which applies before the OS series".
-# UniXNU-sm8250-common@6bb9b025 ships an empty patches/xnu/series, so the board
-# layer supplies them here, referencing the core-owned files through the same
-# arch: prefix the OS series uses for zzz-boot-progress.patch; nothing here is
-# a device-local rewrite of XNU.
+# One core patch is named by neither the ARM64 nor the OS series, and the official
+# records say it must still be present: docs/xnu/patch-reference.md lists
+# sheng-platform-power under the platform series, and
+# docs/.vitepress/device-records/sirius.toml records for sdm710 that "the ARM64 and
+# OS series assume the two files they omit are present". The board layer supplies
+# it here through the same arch: prefix the OS series uses for
+# zzz-boot-progress.patch; nothing here is a device-local rewrite of XNU.
 #
-# native-smp-secondary: MAX_CPUS 4 -> 8 plus MPIDR Affinity1 core numbering for
-# BCM2837. dts/sm8250.dtsi numbers this board's eight Kryo 585 cores as
-# reg = <0 0x0 0x100 ... 0x700>, i.e. the core index sits in Affinity1, so
-# without this patch sheng-smp=1 still brings up one core.
+# native-smp-secondary and native-smp-type-clusters used to be carried here the
+# same way, because UniXNU-sm8250-common@6bb9b025 shipped an empty
+# patches/xnu/series. The feed is now pinned at a6e7e36 (the pin the official
+# SM8250 board alioth uses), whose SoC series applies both, so they are gone from
+# this file: the SoC owns them, and the two are only valid as a pair - the
+# cluster-type tags in dts/dby_w09.dts need native-smp-type-clusters.patch, which
+# is what raises MAX_CPU_CLUSTERS to 2 and defines __ARM_AMP__.
+# scripts/check-smp-topology.py is the gate that refuses the unpaired form.
 #
 # sheng-platform-power: the sheng_pmgr_run() call site in bsd_init.c that
 # CONFIG_XNU_SHENG_PMGR=y needs, and the block zzz-boot-progress.patch quotes as
 # unchanged context at its @@ -773,7 +775,9 @@ hunk.
 #
-# Order in [kernel] patch_series: this file is listed before os: rather than
+# Order in [kernel] patch_series: this file is still listed before os: rather than
 # last. git apply runs the resolved sequence literally (scripts/unixnu/patches.py
 # prepare), and the OS series' zzz-boot-progress.patch hunk only applies once the
 # block above already exists, so the canonical arch/soc/os/device order cannot be
-# satisfied while the SoC series stays empty.
-arch:../../../patches/xnu/native-smp-secondary.patch
+# satisfied while sheng-platform-power has no series of its own.
 arch:../../../patches/xnu/sheng-platform-power.patch
 restore-omitted-public-headers.patch

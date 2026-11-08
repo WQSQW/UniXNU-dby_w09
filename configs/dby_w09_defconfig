@@ -131,8 +131,8 @@ CONFIG_XNU_EXTRA_LD_ARCHIVES="{tree}/build/link-stubs/libLinkStubs.a {tree}/buil
 
 CONFIG_XNU_CRYPTO_BOOTSTRAP="prelinked"
 
-# 数据卷 UUID —— 占位符，选定目标 IPSW + 取证后才填
-CONFIG_XNU_OWNER_DATA_VOLUME_UUID="5DC572E3-3EDF-4D5A-9686-E2DFB577982F"
+# 数据卷 UUID：必须等于 payload --data-ramdisk 那粒种子的 volume UUID。kern_exec.c:7993 按这个字符串查种子，未命中就是 ENOENT，屏上即 offline scratch Data mount failed: 2。本轮换成云 run #19 (42412122118) 的 seed-audio19/data-audio.dbr：它是唯一带 /ngpu/audio/ShengAudio.driver 的种子，0xa00 那次 bindfs 联合挂载的源目录只有它能提供。
+CONFIG_XNU_OWNER_DATA_VOLUME_UUID="F26D17C8-45E7-4C47-9AD9-A2A8C208E44A"
 
 # 显式关闭的项（sheng 有、但 SM8250 阶段先不开）
 # CONFIG_XNU_ARMVIRT_PLATFORM is not set

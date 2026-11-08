@@ -223,12 +223,81 @@ hid_drv_obj=ROOT/'build/sheng-hid-input/NativeHidInput.late.o'
 # the original kernel address instead (__ZTV11IOHIDDevice, an absolute symbol). Without this object the link fails
 # on the vtable of every NativeHidInput virtual.
 hid_bindings_obj=ROOT/'build/sheng-hid-input/hid-original-bindings.o'
+# The audio DSP bring-up (sheng-adsp=2) follows the kit block of upstream's build-gop-legacy-display.py:
+# AdspProbe.cpp plus the protocol cores, the C ones compiled with the kernel osfmk C record. This board
+# keeps its sources in package/, which the assembled tree exposes as kits/dby_w09. Upstream's SM8550-only
+# units are not here: ShengBattmgr (the SM8550 fuel gauge) and MhiBoot (the PCIe modem) are not this
+# machine's silicon, and neither is the SM8550 speaker half -- see the note above the archive list.
+adsp_cpp=ROOT/'kits/dby_w09/AdspProbe.cpp';adsp_obj=TOUCH/'AdspProbe.o'
+adsp_c=[ROOT/'kits/dby_w09'/(n+'.c') for n in ('QcomMdt','FatVolume','QcomQrtr','ShengQrtr','QcomSmem','QcomSmp2p',
+        'QcomGlink','QcomQmp','QcomRpmh','ShengGpr','ShengAudioReach','ShengCs35l43','ShengApr')]
+# The speaker half of the SM8550 kit is deliberately not compiled or linked for this board. Its hardware
+# layer is another machine's silicon: AudioProbe.cpp votes the SM8550 GCC register set, muxes SM8550 TLMM
+# pins, addresses six CS35L43 amplifiers and calls the SM8550 button injector -- while this unit's own
+# hardware answered as a TFA9874 quad on qupv3_se3 (0x98c000), whose wrap0 vote bits are proven as
+# 6/7/8/9/13 at 0x52008 in package/DbySmartPA.cpp, sharing reset GPIO109, and whose ADSP is
+# qcom,lpass@17300000 / qcom,pil-tz-generic, not the SM8550 PAS node. It was also unreachable at run
+# time: sheng-audio is not in this board's kernel_args, so AudioProbe's entry returned at its first gate,
+# while this kernel links no compiler_rt (___udivti3) and has no SM8550 button provider. The Kona graph
+# is built from this machine's own vendor kernel instead, so nothing here is invented.
+run([str(adsp_cpp) if str(a)==str(source) else str(adsp_obj) if str(a)==str(probe) else a for a in cmd]+touch_include,
+    cwd=r['directory'])
+# The protocol cores are C, so they do not take cmd: that record carries -xc++, which turns QcomMdt.c into
+# three errors ((QcomMdtImage){0} and (QcomMdtSplit){0} under -Wmissing-field-initializers, and
+# `uint8_t *out = to;` as a void* conversion C++ refuses). The official shape is upstream's kernel osfmk
+# record: startup.o.json, with -mgeneral-regs-only and the .cache/xnu-work/osfmk include (upstream
+# build-gop-legacy-display.py:212-237, applied to adsp_c at :291).
+pr=json.loads((ROOT/'build/xnu/ios-obj/DEVELOPMENT_ARM64_BCM2837/osfmk/DEVELOPMENT/startup.o.json').read_text().strip().rstrip(','))
+core_cmd=[];pa=pr['arguments'];j=0
+coresentinel=ROOT/'kits/dby_w09/QcomMdt.c';coreobjsentinel=TOUCH/'QcomMdt.o'
+while j<len(pa):
+    value=pa[j]
+    if value==pr['file']:core_cmd.append(str(coresentinel))
+    elif value in ('-o','-MF','-MT','-MJ'):
+        if value=='-o':core_cmd+=['-o',str(coreobjsentinel)]
+        j+=1
+    elif value=='-Xclang' and pa[j+1].startswith('-W'):j+=1
+    elif not value.startswith('-W'):core_cmd.append(value)
+    j+=1
+core_cmd+=['-Wall','-Wextra','-Werror','-mgeneral-regs-only','-I',str(ROOT/'.cache/xnu-work/osfmk')]
+adsp_objs=[]
+for src in adsp_c:
+    o=TOUCH/(src.stem+'.o');adsp_objs.append(o)
+    run([str(src) if str(a)==str(coresentinel) else str(o) if str(a)==str(coreobjsentinel) else a for a in core_cmd],cwd=pr['directory'])
+# The playback ladder (package/DbyAudio.cpp) is the second client of this DSP and the reason ShengApr.c is above:
+# it opens the channel this board's own device tree names (kona.dtsi:4191-4216, apr_audio_svc with
+# qcom,intents = <0x200 20>), walks the AFE/ADM/ASM command ladder ShengApr.c encodes, and plays one mapped PCM
+# stream out of Primary TDM RX 0x9000 - the four-slot port this unit's speakers hang off (asoc/kona.c:6678-6692,
+# kona/DBY/W09_VA/huawei-audio.dtsi). Its entry is sheng_audio_probe, which LegacyDisplayProbe.cpp:501 calls and
+# LinkStubs.c:121 leaves a weak no-op for; until this object existed the call landed on that no-op and the four
+# TFA9874 amplifiers DbySmartPA.cpp initialised never received a single sample. Same compile record as
+# AdspProbe.cpp, and no late staging: the file has one zero-initialised POD at namespace scope, so it emits no
+# __mod_init_func for staging to move.
+audio_cpp=ROOT/'kits/dby_w09/DbyAudio.cpp';audio_obj=TOUCH/'DbyAudio.o'
+run([str(audio_cpp) if str(a)==str(source) else str(audio_obj) if str(a)==str(probe) else a for a in cmd]+touch_include,
+    cwd=r['directory'])
+# The service iOS's audio server plug-in opens (package/ShengAudioService.cpp) is the second half of that pair: DbyAudio.cpp
+# hands out the control page and the sample rings through sheng_audio_memory()/sheng_audio_request(), and the service's user
+# client is what calls them back. It defines two IOKit classes, so it is staged exactly the way upstream's sheng kit stages the
+# same file (upstream/sheng/scripts/build-gop-legacy-display.py:269-270 compile, :299 objcopy, archive list): the static
+# initialiser leaves __mod_init_func and is globalised, because DbyAudio.cpp:434 calls it by name between preModLoad and
+# postModLoad. Registering those classes from __mod_init_func as well is the duplicate OSMetaClass registration this tree has
+# already panicked on.
+service_cpp=ROOT/'kits/dby_w09/ShengAudioService.cpp';service_obj=TOUCH/'ShengAudioService.o'
+run([str(service_cpp) if str(a)==str(source) else str(service_obj) if str(a)==str(probe) else a for a in cmd]+touch_include,
+    cwd=r['directory'])
+service_late=OUT/'ShengAudioService.late.o'
+run([objcopy,'--remove-section=__DATA,__mod_init_func','--globalize-symbol=__GLOBAL__sub_I_ShengAudioService.cpp',service_obj,service_late])
+require(code(service_obj.read_bytes(),macho(service_obj.read_bytes()))==code(service_late.read_bytes(),macho(service_late.read_bytes())),
+        'Owned audio service instructions unchanged by late init staging')
 archive=OUT/'libNativeLegacyDisplay.late.a';archive.unlink(missing_ok=True)
 # The kernel force-loads exactly this archive, and the official sheng/qemu recipe uses that to carry the
 # AppleKeyStore stand-in in it too (build-native-legacy-display.py:255): KeyStoreProbe.o plus the late-staged
 # NativeKeyStoreEvents.o. Without them MKBEventsRegister returns NULL, liveactivitiesd dies at every start,
 # chronod never answers SpringBoard's startup XPC, and the render server keeps the boot image on screen.
-# HID, touch, cpufreq and GPU power stay stubbed: this board selects none of those components.
+# HID and the key store stand in here because this is the force-loaded archive; touch has its own archive
+# (build/dby-touch). cpufreq joins below as a real object; GPU power is still the LinkStubs no-op, because
+# the A650 driver is not in this image yet.
 KEY=ROOT/'build/apple-key-store-state'
 print(run(['python3',ROOT/'scripts/build-arm-driver.py','NativeKeyStoreEvents'],text=True),end='')
 keystore_source=ROOT/'kits/dby_w09/KeyStoreProbe.cpp'
@@ -241,11 +310,87 @@ run([objcopy,'--remove-section=__DATA,__mod_init_func',
 require(code(keyevents.read_bytes(),macho(keyevents.read_bytes()))==
         code(keyevents_late.read_bytes(),macho(keyevents_late.read_bytes())),
         'Owned event-service instructions unchanged by late init staging')
-run(['xcrun','ar','rcs',archive,late,OUT/'original-bindings.o',probe,keystore_obj,keyevents_late,hid_cpp_obj,hid_drv_obj,hid_bindings_obj])
+# The CPU frequency control for this board's EPSS domains (package/CpuFreqProbe.cpp, the official SM8250
+# board alioth's file, taken unchanged). It exports sheng_cpufreq_probe/sheng_cpufreq_poll, which
+# LegacyDisplayProbe.cpp:495 calls once and BootProgress.c:1110 calls every log round; until this object
+# existed both calls landed on the weak no-op in LinkStubs.c:96, so the board never issued one vote and all
+# eight cores sat on the EPSS reset level. Same compile record as the two probes above, so the flags match
+# the kernel's C++ recipe, plus -mgeneral-regs-only the way alioth's recipe passes it (build-gop-legacy-
+# display.py:430-459). This archive is the one the kernel link force-loads, which is the only reason an
+# object no new symbol references still arrives.
+cpufreq_source=ROOT/'kits/dby_w09/CpuFreqProbe.cpp'
+cpufreq_obj=OUT/'CpuFreqProbe.o'
+run([str(cpufreq_source) if str(arg)==str(source) else str(cpufreq_obj) if str(arg)==str(probe) else arg for arg in cmd]
+    +['-mgeneral-regs-only'],cwd=r['directory'])
+
+# Panel brightness (package/AppleARMBacklight.cpp: the sheng board's service with this board's constants; package/
+# BacklightProbe.cpp: its entry; package/GeniI2c.c: the GENI engine core it drives). BacklightProbe.cpp defines
+# sheng_backlight_probe, which LegacyDisplayProbe.cpp:503 calls and LinkStubs.c:131 leaves a weak no-op for: without this
+# object that call lands on the no-op and the panel keeps whatever brightness the boot loader left it at.
+# One engine and one LP8556 at 0x2c on qupv3_se11, 12-bit level across 0x10 and 0x11 (see the file's header for the kernel
+# device tree and clock driver records each constant comes from).
+bl_source=ROOT/'kits/dby_w09/AppleARMBacklight.cpp'
+bl_obj=OUT/'AppleARMBacklight.o'
+run([str(bl_source) if str(arg)==str(source) else str(bl_obj) if str(arg)==str(probe) else arg for arg in cmd]
+    +['-Wno-missing-designated-field-initializers'],cwd=r['directory'])
+bl_probe_source=ROOT/'kits/dby_w09/BacklightProbe.cpp'
+bl_probe_obj=OUT/'BacklightProbe.o'
+run([str(bl_probe_source) if str(arg)==str(source) else str(bl_probe_obj) if str(arg)==str(probe) else arg for arg in cmd]
+    +['-Wno-missing-designated-field-initializers'],cwd=r['directory'])
+# GeniI2c.c is C; the same record carries -xc++, which this source accepts unchanged (no designated initialisers, no implicit
+# void* conversions, and its own header wraps every declaration in extern "C", so the symbols stay unmangled for the service).
+bl_geni_source=ROOT/'kits/dby_w09/GeniI2c.c'
+bl_geni_obj=OUT/'GeniI2c.o'
+run([str(bl_geni_source) if str(arg)==str(source) else str(bl_geni_obj) if str(arg)==str(probe) else arg for arg in cmd]
+    +['-Wno-missing-designated-field-initializers'],cwd=r['directory'])
+# The service's static initialiser registers its classes with the kernel module; BacklightProbe.cpp calls it by name between
+# preModLoad and postModLoad, so it leaves __mod_init_func and is globalised, the same staging the presenter and the key store use.
+# 四颗 smartpa：两张 BOM 表 + 探测 + 主备回退。没有静态初始化，也不需要 late staging。
+pa_source=ROOT/'kits/dby_w09/DbySmartPA.cpp'
+pa_obj=OUT/'DbySmartPA.o'
+run([str(pa_source) if str(arg)==str(source) else str(pa_obj) if str(arg)==str(probe) else arg for arg in cmd]
+    +['-Wno-missing-designated-field-initializers'],cwd=r['directory'])
+# 电池（package/DbyBattery.cpp 这个服务 + package/BatteryProbe.cpp 它的入口）。入口导出
+# sheng_battery_probe：LegacyDisplayProbe.cpp:500 已经在调它，LinkStubs.c:116-117 今天把这个调用
+# 答案成弱空桩——llvm-nm 在已建好的 kernel.macho 上，_sheng_cpufreq_probe 和 _sheng_backlight_probe
+# （它们的对象已是这里的成员）是强 external，_sheng_battery_probe 还是 weak external。让这个归档多出
+# 一个成员就是把那一次调用接到真实现上，机制与上面两块一模一样：归档是被 -force_load 拉进来的
+# （build-xnu-4k-baseline.sh:664），不是因为有新符号引用它。
+# 生产者 ABI 和发布语义抄官方同芯片板 alioth 的 ShengBattery.cpp/BatteryProbe.cpp：同一个
+# native_battery_stats[16]，同一套 IOPMPowerSource 属性键。这 16 格在本树没有读者：原先说
+# BootLog.c:833-845 的 [battery] 行会打印它，实测 BootLog.c 不进任何归档（ar 列表五个成员、无
+# builder 引用、内核里无 boot_log_export_put），所以读数只能从这个服务自己的 kprintf 行看——
+# COM4 只镜像 kprintf，IOLog 上不来。换掉的只有传输：本机没有 ADSP 栈、全盘没有 adsp.mbn，
+# 而这块板的 stock DTBO（b01.dts:574-620）把电量计写成 SPMI 上的 qcom,fg-gen4、充电器写成
+# qcom,qpnp-smb5（b01.dts:447-470），所以直读 arbiter 的观察者引擎——那正是 DbyTouch 在本板跑通的通道。
+# 只读是构造性的：本文件写出去的每个 32 位字都是带读操作码的观察者命令字；arbiter 的写通道窗口 chnls
+# （0x0c600000 + 0x2000000）在这里和 DbyTouch 里都从不映射。
+battery_source=ROOT/'kits/dby_w09/DbyBattery.cpp'
+battery_obj=OUT/'DbyBattery.o'
+run([str(battery_source) if str(arg)==str(source) else str(battery_obj) if str(arg)==str(probe) else arg for arg in cmd]
+    +['-Wno-missing-designated-field-initializers'],cwd=r['directory'])
+battery_probe_source=ROOT/'kits/dby_w09/BatteryProbe.cpp'
+battery_probe_obj=OUT/'BatteryProbe.o'
+run([str(battery_probe_source) if str(arg)==str(source) else str(battery_probe_obj) if str(arg)==str(probe) else arg for arg in cmd]
+    +['-Wno-missing-designated-field-initializers'],cwd=r['directory'])
+# DbyBattery.cpp 的静态初始化把类注册进内核模块，所以它要和 AppleARMBacklight、NativeKeyStoreEvents、
+# NativeGOPPresenter 一样：初始化函数从 __mod_init_func 里摘出去、改名成全局符号，由 BatteryProbe.cpp 在
+# preModLoad 与 postModLoad 之间按名字调用。留着不改会同一个类注册两次，本树已经为重复注册在
+# IOBlockStorageDevice 上 panic 过一次。符号名不是猜的：llvm-nm 在这个对象上是
+# (__TEXT,__text) non-external __GLOBAL__sub_I_DbyBattery.cpp。
+battery_late=OUT/'DbyBattery.late.o'
+run([objcopy,'--remove-section=__DATA,__mod_init_func','--globalize-symbol=__GLOBAL__sub_I_DbyBattery.cpp',battery_obj,battery_late])
+require(code(battery_obj.read_bytes(),macho(battery_obj.read_bytes()))==code(battery_late.read_bytes(),macho(battery_late.read_bytes())),
+        'Owned battery instructions unchanged by late init staging')
+bl_late=OUT/'AppleARMBacklight.late.o'
+run([objcopy,'--remove-section=__DATA,__mod_init_func','--globalize-symbol=__GLOBAL__sub_I_AppleARMBacklight.cpp',bl_obj,bl_late])
+require(code(bl_obj.read_bytes(),macho(bl_obj.read_bytes()))==code(bl_late.read_bytes(),macho(bl_late.read_bytes())),
+        'Owned backlight instructions unchanged by late init staging')
+run(['xcrun','ar','rcs',archive,late,OUT/'original-bindings.o',probe,keystore_obj,keyevents_late,hid_cpp_obj,hid_drv_obj,hid_bindings_obj,cpufreq_obj,bl_late,bl_probe_obj,bl_geni_obj,pa_obj,battery_late,battery_probe_obj,adsp_obj,*adsp_objs,audio_obj,service_late])
 sources=[ROOT/'drivers/GopFramebuffer/NativeLegacyDisplay.cpp',
          ROOT/'drivers/GopFramebuffer/NativeLegacyRequest.h',source,
-         keystore_source,ROOT/'drivers/NativeKeyStoreEvents/NativeKeyStoreEvents.cpp',hid_cpp,
-         ROOT/'kits/dby_w09/SmmuBypass.h']
+         keystore_source,ROOT/'drivers/AppleKeyStoreState/NativeKeyStoreEvents.cpp',hid_cpp,
+         cpufreq_source,ROOT/'kits/dby_w09/SmmuBypass.h',bl_source,bl_probe_source,bl_geni_source,pa_source,battery_source,battery_probe_source,adsp_cpp,audio_cpp,service_cpp,*adsp_c]
 # The presenter is its own official component build; only its initializer registration moves to late staging.
 print(run(['python3',ROOT/'scripts/build-arm-driver.py','NativeGOPPresenter'],text=True),end='')
 gop=ROOT/'build/native-gop-presenter';gop_late=gop/'NativeGOPPresenter.late.o'

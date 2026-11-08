@@ -108,6 +108,8 @@ __attribute__((weak)) int native_gpu_addon2_stage;
 __attribute__((weak)) int native_gpu_addon2_status;
 __attribute__((weak)) int native_gpu_addon3_stage;
 __attribute__((weak)) int native_gpu_addon3_status;
+__attribute__((weak)) int native_gpu_addon4_stage;
+__attribute__((weak)) int native_gpu_addon4_status;
 __attribute__((weak)) int native_gpu_addon_error;
 __attribute__((weak)) int native_gpu_addon_failed;
 __attribute__((weak)) int native_gpu_addon_files;

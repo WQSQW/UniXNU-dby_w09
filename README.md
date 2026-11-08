@@ -88,6 +88,22 @@ Two things about that sequence are load-bearing:
 Kernel arguments reach the device through the payload's ESP `unixnu.toml`, so a
 `[payload] kernel_args` change only needs a payload rebuild.
 
+- **The output directory comes from `[board] name`, not from a flag.** `--out DIR` re-roots the tree but the
+  sub-path is always `<slug>/ipados-<os>-<build>/<board id>`, so renaming the board moves everything under it
+  and leaves the previous tree where it was. The slug is `dby-w09` because the upstream device catalog rejects
+  an underscore, while the board id inside the path stays `dby_w09`.
+
+### A fresh output tree needs three inputs no builder here can make
+
+Those are build-tree artifacts, not repository files: they embed the donor Apple kernelcache, so they can never
+be committed and a clean tree cannot pass the gates without them.
+
+| Input | Who requires it | What it is |
+| --- | --- | --- |
+| `tree/build/xnu-prelink/*-candidate.macho` and `.json` | `scripts/build-sheng-hid-input.py`, `scripts/build-gop-legacy-display.py` | this board's previous prelinked kernel (`out/<slug>/…/kernel`), which the HID and display ABI audits compare instruction identity against. `scripts/build-platform-power.py` documents the same reference and has a no-op fallback; the other two have none, so on a new tree they abort with `No reference candidate available`. |
+| `tree/build/display-analysis/mobile-graphics-legacy-abi.json` | `scripts/audit-mobile-graphics-legacy.py` | the recorded runtime observation the audit falls back to when the live `gdb-stop.json` is absent, keyed by `runtime_metadata_checkpoint_sha256`. |
+| `tree/build/verified-root-os-xnu-bundle/libVerifiedRootProbe.a` | `scripts/unixnu/kernel.py` (`XNU_VERIFIED_ROOT_ARCHIVE`) | the archive whose only producer, `scripts/build-cpu-desktop-kernel.py`, needs macOS `hdiutil`. The guide's rule for an archive no builder makes is to supply it in the build tree. |
+
 ## Flash
 
 ```sh
@@ -104,8 +120,8 @@ the firmware tree instead (see Deviations).
 
 ## Status
 
-Measured on hardware, 2026-11-05 (payload `09c3aad6…`, prelinked kernel candidate
-`a6382e52…`, firmware tree `WQSQW/uefi-dby_w09@423e222`). See
+Measured on hardware, 2026-11-05 (prelinked kernel `60f3dbac…`, payload `68059cca…`,
+firmware tree `WQSQW/uefi-dby_w09@423e222`). See
 `porting.toml` for the per-area record and evidence.
 
 | Area | State |
@@ -115,6 +131,7 @@ Measured on hardware, 2026-11-05 (payload `09c3aad6…`, prelinked kernel candid
 | Root and data volumes | native UFS root, OS and SystemOS windows mounted, packed Data seed with a persistent overlay |
 | Display | XNU presents scanout: the iPadOS lock screen is on the panel |
 | Input | `DbyTouch` (accepted from a stack verified on this same panel model) reports points on the lock screen; the Home and volume keys reach XNU |
+| CPU | eight cores up as two clusters (`unixnu,cluster-type` E on cpu0-3, P on cpu4-7, `MAX_CPU_CLUSTERS 2`, `__ARM_AMP__`), EPSS frequency votes issued by `package/CpuFreqProbe.cpp` |
 | GPU | not ported; the current frames are CPU-rendered scanout |
 | Audio, network, camera | not started |
 

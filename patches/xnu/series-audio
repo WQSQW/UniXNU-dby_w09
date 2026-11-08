@@ -1,0 +1,9 @@
+#
+# zzyd-sheng-audio-addon-mount.patch: the bind mount that puts this board's audio server plug-in
+# (ShengAudio.driver, delivered in the gpu-addon payload input) next to the system's own HAL bundle. It is its own
+# series rather than an append to patches/xnu/series because it must apply after the whole os: layer: its context
+# is the tail of native_gpu_addon_prepare as zzy-native-gpu-addon-mount, zzy-staged-system-apps and
+# zzyb-native-cryptex-os-view leave it, and the resolved order puts device:patches/xnu/series before os: (see the
+# note there). The two series-usb patches that already run here touch other files.
+#
+zzyd-sheng-audio-addon-mount.patch
