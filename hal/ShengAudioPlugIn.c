@@ -19,8 +19,8 @@
 
 enum {kPlugIn = kAudioObjectPlugInObject, kDevice = 2, kOutStream = 3, kInStream = 4, kVolume = 5};
 #define kPlugInBundleID "org.unixnu.sheng.audio"
-#define kDeviceUID "ShengAudioDevice"
-#define kModelUID "ShengAudioModel"
+#define kDeviceUID "DbyW09Speaker"
+#define kModelUID "DbyW09SpeakerModel"
 static const Float64 kRate = SHENG_AUDIO_RATE;
 // The time stamp period. It must exceed the safety offset plus an IO cycle, or the audio server never runs IO (i543: 8192, no writes).
 static const UInt32 kZeroPeriod = SHENG_AUDIO_RING_FRAMES;
@@ -336,7 +336,10 @@ static OSStatus propertyData(AudioObjectID o, const AudioObjectPropertyAddress *
         case kAudioObjectPropertyBaseClass: REPLY(AudioClassID, kAudioObjectClassID);
         case kAudioObjectPropertyClass: REPLY(AudioClassID, kAudioStreamClassID);
         case kAudioObjectPropertyOwner: REPLY(AudioObjectID, kDevice);
-        case kAudioObjectPropertyName: if (o == kOutStream) REPLY_STR("Speaker"); REPLY_STR("Microphone");
+        // The route label iPadOS prints is the output stream's name, not the device's: the previous cycle renamed the device and
+        // model name (lines above) and the panel still read "Speaker", and the only place this binary still spells that word is here.
+        // The UIDs change with it so a name iPadOS cached per device cannot explain the answer.
+        case kAudioObjectPropertyName: if (o == kOutStream) REPLY_STR("MatePad Speaker"); REPLY_STR("Microphone");
         case kAudioObjectPropertyOwnedObjects: *outDataSize = 0; return 0;
         case kAudioStreamPropertyIsActive: REPLY(UInt32, 1);
         case kAudioStreamPropertyDirection: REPLY(UInt32, o == kInStream);
