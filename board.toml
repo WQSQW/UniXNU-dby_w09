@@ -76,7 +76,9 @@ patch_series = ["arch:patches/xnu/series", "soc:patches/xnu/series", "device:pat
   "device:patches/xnu/series-usb",
   # 音频 HAL 的挂载点必须排在所有层之后：它的上下文是 os: 层那三个 kern_exec 补丁打完之后的样子（见
   # patches/xnu/series-audio 的说明）。
-  "device:patches/xnu/series-audio"]
+  "device:patches/xnu/series-audio",
+  # 手电筒插件的挂载点排在最后：它的两处上下文正是 series-audio 插入的行（见 patches/xnu/series-torch 的说明）。
+  "device:patches/xnu/series-torch"]
 archives = [
   # arch:configs/common.config 打开 SOURCE_CORECRYPTO14 / SOURCE_PTHREAD，
   # 这两个归档只有这两步会产。

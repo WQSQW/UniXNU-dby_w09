@@ -23,6 +23,7 @@
 extern "C" {
 #include "DbyTorch.h"
 #include "DbyTorchCore.h"
+#include "DbyTorchIos.h"
 #include "DbyTorchText.h"
 }
 
@@ -207,6 +208,8 @@ void torchThread(void *, wait_result_t)
 extern "C" void dby_torch_start(void)
 {
     const unsigned mode = argument("dby-torch", 0);
+    // The iOS switch first (DbyTorchIos.h, DbyTorchIos.cpp): it only plans here, the service and the node come just before launchd.
+    dby_torch_ios_plan(argument("dby-torch-ios", 0), mode);
     if (!dbt_config_make(&gConfig, mode, DBT_EE, DBT_TORCH_MAX_MA, argument("dby-torch-max-ma", 0),
                          argument("dby-torch-log", 1)))
         return;

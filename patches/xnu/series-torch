@@ -1,0 +1,17 @@
+# 手电筒原生面的第三条 series：kern_exec.c 的第五个 native_gpu_addon_mount()，把
+# Data 种子交付的 H6ISP.mediacapture 并挂到 /System/Library/MediaCapture 上，之后
+# dby_torch_ios_commit(stage == 5) 才发布 AppleH6CamIn 与 /product/camera 的 flash。
+# 挂载本身用的还是壁纸、LaunchDaemons、Metal 包与音频 HAL 那一个 bindfs 联合，
+# 根卷一个字节也不写；判据是 native_gpu_addon5_stage/status，随 BootLog 的 A 行出去。
+#
+# 顺序：排在 [kernel] patch_series 的最后，也就是 device:patches/xnu/series-audio 之后。
+# 这不是偏好，是上下文要求的：本补丁第一个 hunk 的锚是
+# native_gpu_addon4_stage/native_gpu_addon4_status，第二个 hunk 的锚是音频那次 mount 调用的
+# 结尾两行，两者都由 zzyd-sheng-audio-addon-mount.patch 插入，而
+# scripts/unixnu/patches.py:prepare 严格按解析出的顺序逐个 git apply，所以锚只在那一份跑完
+# 之后才存在。母本的同一形状见 refer/Pagani/patches/xnu/phone-torch-overlay.patch。
+#
+# 启用门是启动参数 dby-torch-ios=1 且 dby-torch=1：不带这两个参数时这里既不挂也不调，
+# dby_torch_ios_commit 只经由它自己的 weak 绑定被引用，内核行为与今天逐字节一致。
+#
+zze-dby-torch-media-mount.patch

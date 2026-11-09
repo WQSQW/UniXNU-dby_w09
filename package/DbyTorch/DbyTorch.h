@@ -15,6 +15,12 @@
  *   dby-torch-test=MS     bring-up: on at level 1000 for MS ms (at most 1000) right after the
  *                         initialization, then off (mode 1 only)
  *   dby-torch-log=N       0 failures only, 1 rationed (default), 2 every change
+ *   dby-torch-ios=N       0 or absent: no iOS flashlight surface (DbyTorchIos.h and
+ *                         DbyTorchIos.cpp never run); 1: publish the AppleH6CamIn service, its
+ *                         mediaserverd-only user client and IODeviceTree:/product/camera "flash",
+ *                         just before launchd - and only when this driver runs at mode 1 and the
+ *                         H6ISP.mediacapture plug-in is visible on the root, so the Control Center
+ *                         button is never a button that does nothing
  *
  * An "on" ends by itself after 5 minutes; any bus failure, refusal, failed read-back or fault bit
  * switches the LED off, closes the write gate and keeps the driver off until reboot. */

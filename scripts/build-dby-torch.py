@@ -5,11 +5,17 @@
 
 Run by the UniXNU kernel step as an archive recipe (board.toml [kernel] archives, cwd = the tree), the slot
 scripts/build-dby-touch.py also occupies. The archive holds the portable core (DbyTorchSpmi.c, DbyTorchCore.c,
-with the BSD record's C flags) and the kernel glue DbyTorch.cpp (with the IOKit C++ record's flags). It is linked
-through CONFIG_XNU_EXTRA_LD_ARCHIVES, not force_load: package/BootProgress.c names dby_torch_start(), so the plain
-archive path always pulls it. Kernel code here never uses floating point (-mgeneral-regs-only) and no object may
-carry a static initializer: the torch has no class, and __mod_init_func in it would put its text in the boot of a
-kernel that was never asked to run it (the driver stays inert unless the payload carries dby-torch=<mode>).
+DbyTorchIos.c with the BSD record's C flags) and the kernel glue DbyTorch.cpp and DbyTorchIos.cpp (with the IOKit
+C++ record's flags). It is linked through CONFIG_XNU_EXTRA_LD_ARCHIVES, not force_load: package/BootProgress.c
+names dby_torch_start(), so the plain archive path always pulls it. Kernel code here never uses floating point
+(-mgeneral-regs-only). Only DbyTorchIos.cpp may carry a static initializer, and its initializer is taken out of
+__DATA,__mod_init_func by llvm-objcopy and globalized as __GLOBAL__sub_I_DbyTorchIos.cpp, so the class is
+registered when dby_torch_ios_commit() asks for it and not at boot: a kernel without dby-torch-ios=1 gets neither
+the AppleH6CamIn class nor the service. That is the same late registration drivers/NativeLegacyDisplay uses. The
+objcopy is checked, not trusted: the __text bytes must be the ones the compiler produced and the section must be
+gone, because a renamed text section would change which instructions run. The other objects must carry no
+__mod_init_func at all: the driver itself has no class, and its text would otherwise sit in the boot of a kernel
+that was never asked to run it (it stays inert unless the payload carries dby-torch=<mode>).
 
 The records are read, never written. Recorded commands carry no -Werror of their own and their -W set is XNU's
 (-Weverything included), so every -W is dropped and this script's list is used instead: -Wall -Wextra -Werror plus
@@ -18,9 +24,11 @@ macros trip them in every driver that includes IOLib.h, and the fifth because os
 IOKit/system.h) | a kmr_flags_t with a kmem_flags_t, which clang diagnoses in C++ and only kernel-owned text could
 fix. Both reasons are written in README.md, not hidden in a flag list.
 
-The gate after the archive is what a kernel build cannot say: the 18 entry points really defined, every kernel
-import on the allowlist and nothing else (_kprintf present and _IOLog absent, because this board's COM4 mirrors
-kprintf rows only), no __mod_init_func, and each object audited as an ARM64 Mach-O for iOS 17.0.
+The gate after the archive is what a kernel build cannot say: every entry point REQUIRED names really defined,
+every kernel import on the allowlist and nothing else (_kprintf present and _IOLog absent, because this board's
+COM4 mirrors kprintf rows only), every import - the IOKit and libkern mangled names the allowlist cannot speak for -
+defined by this tree's own linked kernel, no __mod_init_func outside the staged object, and each object audited as
+an ARM64 Mach-O for iOS 17.0.
 
 Source lookup order is tree/drivers/DbyTorch, tree/kits/dby_w09/DbyTorch, package/DbyTorch - kits/dby_w09 is this
 repository's package/, so the in-repo sources are found with no copy step.
@@ -40,11 +48,14 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 ARCH = 'DEVELOPMENT_ARM64_BCM2837'
 RECORD_DIR = Path(f'build/xnu/ios-obj/{ARCH}')
+KERNEL_IMAGE = Path('build/xnu/ios-obj/mach.development.bcm2837')
 CXX_RECORD = RECORD_DIR / 'iokit/DEVELOPMENT/IOPlatformExpert.cpo.json'
 C_RECORD = RECORD_DIR / 'bsd/DEVELOPMENT/bsd_init.o.json'
-C_SOURCES = ['DbyTorchSpmi.c', 'DbyTorchCore.c']
+C_SOURCES = ['DbyTorchSpmi.c', 'DbyTorchCore.c', 'DbyTorchIos.c']
 CXX_SOURCES = ['DbyTorch.cpp']
-HEADERS = ['DbyTorchRegs.h', 'DbyTorchText.h', 'DbyTorchSpmi.h', 'DbyTorchCore.h', 'DbyTorch.h']
+STAGED = 'DbyTorchIos.cpp'
+INITIALIZER = '__GLOBAL__sub_I_DbyTorchIos.cpp'
+HEADERS = ['DbyTorchRegs.h', 'DbyTorchText.h', 'DbyTorchSpmi.h', 'DbyTorchCore.h', 'DbyTorchIos.h', 'DbyTorch.h']
 WARNINGS = ['-Wall', '-Werror', '-Wextra',
             '-Wno-missing-designated-field-initializers', '-Wno-c99-designator', '-Wno-reorder-init-list',
             '-Wno-unnecessary-virtual-specifier',
@@ -54,13 +65,22 @@ WARNINGS = ['-Wall', '-Werror', '-Wextra',
 REQUIRED = ['_dby_torch_start', '_dby_torch_status', '_dby_torch_set', '_dby_torch_request', '_dby_torch_level',
             '_dbt_core_init', '_dbt_core_set', '_dbt_core_poll', '_dbt_core_export', '_dbt_config_make', '_dbt_test_ms',
             '_dbt_spmi_discover', '_dbt_spmi_open', '_dbt_spmi_read', '_dbt_spmi_write', '_dbt_spmi_emergency_stop',
-            '_dbt_current_law', '_dbt_level_ma']
+            '_dbt_current_law', '_dbt_level_ma',
+            '_dbt_ios_plan', '_dbt_ios_final', '_dbt_ios_level',
+            '_dby_torch_ios_plan', '_dby_torch_ios_commit', '_dby_torch_ios_status', INITIALIZER]
 KERNEL_IMPORTS = {'_kprintf', '_IODelay', '_IOSleep', '_IOLockAlloc', '_IOLockLock', '_IOLockUnlock',
                   '_IOMalloc_internal', '_KHEAP_DEFAULT', '_PE_parse_boot_argn', '_absolutetime_to_nanoseconds',
                   '_mach_absolute_time', '_assert_wait_timeout', '_clear_wait', '_current_thread', '_thread_block',
                   '_thread_wakeup_prim', '_kernel_thread_start', '_thread_deallocate', '_thread_set_thread_name',
                   '_memcpy', '_memset', '_bzero', '_lck_mtx_lock', '_lck_mtx_unlock', '___stack_chk_fail',
-                  '___stack_chk_guard'}
+                  '___stack_chk_guard',
+                  # the iOS half: the caller's process name for the mediaserverd gate, the kmod_info the late
+                  # OSMetaClass registration names, and the IODeviceTree plane the /product/camera node joins.
+                  '_proc_selfname', '_g_kernel_kmod_info', '_gIODTPlane',
+                  # what clang emits for new/delete of an IOObject: defined in this tree's own kernel
+                  # (mach.development.bcm2837 has both at S), and the same pair the accepted libShengHidInput.a,
+                  # libNativeLegacyDisplay.a and libDbyTouch.a already take.
+                  '_OSObject_typed_operator_new', '_OSObject_typed_operator_delete'}
 
 
 def fail(message):
@@ -126,6 +146,13 @@ def sections(obj):
     return result
 
 
+def text(obj):
+    """The __text bytes: instructions only, so an objcopy that only touched symbols and one section is caught by
+    anything that moved or changed a single instruction."""
+    fileoff, length = sections(obj)[('__TEXT', '__text')]
+    return obj.read_bytes()[fileoff:fileoff + length]
+
+
 def audit(obj):
     """ARM64 Mach-O object for iOS, minimum 17.0."""
     data = obj.read_bytes()
@@ -184,6 +211,19 @@ def symbols(archive):
     return defined, undefined - defined
 
 
+def kernel_symbols(kernel):
+    """Every name the tree's own linked kernel defines, or None when that kernel is not there yet (a first build in a fresh tree).
+
+    This is what makes the C++ half's imports a fact instead of a shape: of the archive's 239 external names, 213 are IOKit and libkern
+    mangled symbols (__Z...) that no allowlist can say anything about, and the only thing that says this kernel really carries them is
+    this kernel."""
+    if not kernel.is_file():
+        return None
+    output = subprocess.run([tool('llvm-nm'), '--defined-only', str(kernel)], check=True, capture_output=True,
+                            text=True, timeout=900).stdout
+    return {line.split()[-1] for line in output.splitlines() if line.split()}
+
+
 def symdef(archive):
     """The name of the archive's first member, which is where its symbol index sits.
 
@@ -217,7 +257,7 @@ def main():
     source = next((c.resolve() for c in candidates if c and (c / 'DbyTorch.cpp').is_file()), None)
     if source is None:
         fail('DbyTorch.cpp not found in: ' + ', '.join(str(c) for c in candidates))
-    missing = [name for name in C_SOURCES + CXX_SOURCES + HEADERS if not (source / name).is_file()]
+    missing = [name for name in C_SOURCES + CXX_SOURCES + [STAGED] + HEADERS if not (source / name).is_file()]
     if missing:
         fail('missing sources: ' + ', '.join(missing))
     out = (args.out or tree / 'build/dby-torch').resolve()
@@ -226,42 +266,68 @@ def main():
     cxx_record, c_record = load_record(tree, CXX_RECORD), load_record(tree, C_RECORD)
     extra = ['-I', str(source), '-I', str(tree / '.cache/xnu-work/osfmk'), '-mgeneral-regs-only'] + WARNINGS
     skipped, objects = [], []
+
+    def object_name(name):
+        """The whole file name, dots and all: DbyTorchIos.c and DbyTorchIos.cpp share a stem, and one stem would mean
+        one object silently replacing the other before the archive is written."""
+        return name.replace('.', '_') + '.torch.o'
+
     for name in C_SOURCES:
-        obj = out / 'obj' / (Path(name).stem + '.torch.o')
+        obj = out / 'obj' / object_name(name)
         skipped += compile_one(c_record, source / name, obj, extra)
         objects.append(obj)
     for name in CXX_SOURCES:
-        obj = out / 'obj' / (Path(name).stem + '.torch.o')
+        obj = out / 'obj' / object_name(name)
         skipped += compile_one(cxx_record, source / name, obj, extra)
         objects.append(obj)
     for obj in objects:
         if any(sect == '__mod_init_func' for _, sect in sections(obj)):
-            fail(f'{obj.name} has a static initializer; the torch has none')
+            fail(f'{obj.name} has a static initializer; only {STAGED} may, and it is registered late')
+    staged = out / 'obj' / object_name(STAGED)
+    skipped += compile_one(cxx_record, source / STAGED, staged, extra)
+    late = out / 'obj' / object_name(STAGED).replace('.torch.o', '.torch.late.o')
+    late.unlink(missing_ok=True)
+    subprocess.run([tool('llvm-objcopy'), '--remove-section=__DATA,__mod_init_func',
+                    '--globalize-symbol=' + INITIALIZER, str(staged), str(late)], check=True, timeout=300)
+    if text(staged) != text(late) or any(sect == '__mod_init_func' for _, sect in sections(late)):
+        fail('staging the class initializer changed its instructions or kept __mod_init_func')
+    objects.append(late)
     archive = out / 'libDbyTorch.a'
     archive.unlink(missing_ok=True)
     subprocess.run(['xcrun', 'ar', 'rcs', str(archive), *map(str, objects)], check=True, timeout=300)
     index = symdef(archive)
     if not index.startswith('__.SYMDEF'):
-        fail(f'{archive}: symbol index is {index!r}, not __.SYMDEF; `xcrun ar` resolved to the host\'s GNU ar, whose index of a Mach-O '
-             "archive lists none of its symbols, so ld64 would pull nothing and the kernel's undefined _dby_torch_start would fail the "
-             'link. Run this with the kernel step\'s PATH (the toolchain bin first), as the official build does')
+        fail(f'{archive}: symbol index is {index!r}, not __.SYMDEF; `xcrun ar` execs whatever `ar` the environment resolves, and on this '
+             "host that is GNU ar unless the Mach-O toolchain bin is reachable (the kernel step gets it from PATH; scripts/linux's xcrun "
+             "shim calls it XNU_TOOLCHAIN_BIN). A GNU index of a Mach-O archive lists none of its symbols, so ld64 would pull nothing and "
+             "the kernel's undefined _dby_torch_start would fail the link or, worse, the torch would be silently absent")
     defined, undefined = symbols(archive)
     problems = [f'{name} not defined' for name in REQUIRED if name not in defined]
     unexpected = sorted(name for name in undefined if name not in KERNEL_IMPORTS and not name.startswith('__Z'))
     problems += [f'unexpected kernel import {name}' for name in unexpected]
     if problems:
         fail('archive symbol check failed:\n  ' + '\n  '.join(problems))
-    listed = [source / name for name in C_SOURCES + CXX_SOURCES + HEADERS] + [Path(__file__).resolve()]
+    kernel = tree / KERNEL_IMAGE
+    table = kernel_symbols(kernel)
+    if table is None:
+        print(f"note: {kernel} is not here, so the imports were checked against the allowlist and the __Z shape only")
+    else:
+        absent = sorted(name for name in undefined if name not in table)
+        if absent:
+            fail(f'{kernel} does not define {len(absent)} import(s): ' + ', '.join(absent[:12]))
+    listed = [source / name for name in C_SOURCES + CXX_SOURCES + [STAGED] + HEADERS] + [Path(__file__).resolve()]
     report = {'tree': str(tree), 'source_dir': str(source), 'archive': str(archive), 'archive_bytes': archive.stat().st_size,
               'archive_sha256': sha(archive), 'archive_index': index,
               'objects': {obj.name: obj.stat().st_size for obj in objects},
               'source_sha256': {p.name: sha(p) for p in listed}, 'warning_flags': WARNINGS,
               'entry_points': REQUIRED, 'undefined': sorted(undefined), 'skipped_include_dirs': skipped,
+              'kernel_image': str(kernel), 'kernel_imports_checked_against_kernel': table is not None,
               'hardware_execution': False}
     (out / 'build-report.json').write_text(json.dumps(report, indent=2) + '\n')
     if skipped:
         print('note: skipped missing include dirs: ' + ', '.join(sorted(set(skipped))))
-    print(f'PASS: {len(objects)} objects in {archive} ({len(REQUIRED)} entry points, {len(undefined)} kernel imports)')
+    checked = f', every one defined by {kernel}' if table is not None else ''
+    print(f'PASS: {len(objects)} objects in {archive} ({len(REQUIRED)} entry points, {len(undefined)} kernel imports{checked})')
     print(f'      link it with CONFIG_XNU_EXTRA_LD_ARCHIVES="{tree}/build/dby-torch/libDbyTorch.a"')
 
 

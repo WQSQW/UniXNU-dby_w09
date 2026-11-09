@@ -51,6 +51,10 @@ extern volatile int native_gpu_addon2_stage __attribute__((weak_import));
 extern volatile int native_gpu_addon2_status __attribute__((weak_import));
 extern volatile int native_gpu_addon3_stage __attribute__((weak_import));
 extern volatile int native_gpu_addon3_status __attribute__((weak_import));
+extern volatile int native_gpu_addon4_stage __attribute__((weak_import));
+extern volatile int native_gpu_addon4_status __attribute__((weak_import));
+extern volatile int native_gpu_addon5_stage __attribute__((weak_import));
+extern volatile int native_gpu_addon5_status __attribute__((weak_import));
 extern volatile int native_cryptex_os_stage __attribute__((weak_import));
 extern volatile int native_cryptex_os_status __attribute__((weak_import));
 extern volatile int native_gestalt_cache_status __attribute__((weak_import));
@@ -332,13 +336,21 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
     at = put(out, at, cap, row, sizeof row);
   }
   // The payload's GPU addon (kern_exec.c native_gpu_addon_install): files in it (-1 none), written, already equal, failed, last error; then
-  // the stage/status of the boot-time addon mounts (stage 5 = mounted and both entries visible): plugin, launchd job, wallpaper.
+  // the stage/status of the boot-time addon mounts (stage 5 = mounted and both entries visible): plugin, launchd job, wallpaper,
+  // audio HAL, flashlight plug-in. The last two are the two mounts the audio and torch rounds added; mount4 is what the audio
+  // union of /System/Library/Audio/Plug-Ins/HAL answers with, and mount5 is the ladder that says whether the MediaCapture overlay
+  // took at all -- 1 with a status is no /private/var/ngpu/mediacapture, 2 or 3 a refused mount, 4 no sealed lower entry, 5 the
+  // overlay visible. Without these two the torch commit is called with plugin_visible=0 and nothing on any row says why.
   if (&native_gpu_addon_files && &native_gpu_addon_stage) {
-    char row[120];
-    snprintf(row, sizeof row, "A files=%d wr=%d same=%d fail=%d err=%d mount=%d/%d mount2=%d/%d mount3=%d/%d", native_gpu_addon_files,
+    char row[200];
+    snprintf(row, sizeof row, "A files=%d wr=%d same=%d fail=%d err=%d mount=%d/%d mount2=%d/%d mount3=%d/%d "
+             "mount4=%d/%d mount5=%d/%d",
+             native_gpu_addon_files,
              native_gpu_addon_written, native_gpu_addon_same, native_gpu_addon_failed, native_gpu_addon_error, native_gpu_addon_stage,
              native_gpu_addon_status, native_gpu_addon2_stage, native_gpu_addon2_status, &native_gpu_addon3_stage ? native_gpu_addon3_stage : 0,
-             &native_gpu_addon3_status ? native_gpu_addon3_status : 0);
+             &native_gpu_addon3_status ? native_gpu_addon3_status : 0, &native_gpu_addon4_stage ? native_gpu_addon4_stage : 0,
+             &native_gpu_addon4_status ? native_gpu_addon4_status : 0, &native_gpu_addon5_stage ? native_gpu_addon5_stage : 0,
+             &native_gpu_addon5_status ? native_gpu_addon5_status : 0);
     at = put(out, at, cap, row, sizeof row);
   }
   // The OS cryptex path (kern_exec.c native_cryptex_os_view; stage 5 = a WebKit extension found through /System/Cryptexes/OS) and the

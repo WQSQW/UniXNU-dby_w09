@@ -1,0 +1,44 @@
+diff --git a/bsd/kern/kern_exec.c b/bsd/kern/kern_exec.c
+--- a/bsd/kern/kern_exec.c
++++ b/bsd/kern/kern_exec.c
+@@ -7214,6 +7214,12 @@
+ volatile int native_gpu_addon3_status = -1;
+ volatile int native_gpu_addon4_stage = 0;
+ volatile int native_gpu_addon4_status = -1;
++/* The flashlight plug-in overlay below: the stage and status of its mount, the same ladder as the four addons above. */
++volatile int native_gpu_addon5_stage = 0;
++volatile int native_gpu_addon5_status = -1;
++/* DbyTorch (package/DbyTorch/DbyTorchIos.h), on boards that link it: publishes the capture service and the
++ * /product/camera flash property, or not, from what the overlay shows. */
++extern void dby_torch_ios_commit(int plugin_visible) __attribute__((weak_import));
+ static void
+ native_gpu_addon_mount(proc_t p, user_addr_t scratch, user_addr_t offset, const char *source, size_t source_size,
+     const char *point, size_t point_size, const char *visible, const char *own, volatile int *stage, volatile int *status)
+@@ -7676,6 +7682,27 @@
+ 	native_gpu_addon_mount(p, scratch, 0xa00, audio_source, sizeof(audio_source), audio_point, sizeof(audio_point),
+ 	    "/System/Library/Audio/Plug-Ins/HAL/BuiltinAudioPlugin.driver", "/System/Library/Audio/Plug-Ins/HAL/ShengAudio.driver/Info.plist",
+ 	    &native_gpu_addon4_stage, &native_gpu_addon4_status);
++	/* The iOS flashlight (boot-arg dby-torch-ios=1 with dby-torch=1: package/DbyTorch, DbyTorchIos.h). CMCapture opens
++	 * /System/Library/MediaCapture/H6ISP.mediacapture in mediaserverd once a service of class AppleH6CamIn exists; that
++	 * directory is empty on the root and the file is not in the shared cache, so the owner overlay
++	 * /private/var/ngpu/mediacapture (scripts/add-dby-torch-data.py) can hold the plug-in. The root has no entry there to
++	 * prove the lower layer with, so the directory itself stands for it; the plug-in proves the overlay on top (stage 5).
++	 * The window is 0xe00: these four mounts take 0x400, 0x600, 0x800 and 0xa00 of the one page that load_init_program
++	 * allocated for scratch, a mount consumes its window plus 0x130, and 0xc00 belongs to the mkdir and unlink paths that
++	 * run below. Then DbyTorch publishes the service and the property behind MobileGestalt's camera-flash, only with the
++	 * plug-in visible: no button that does nothing. This is the last stop before launchd, and native_gestalt_cache_drop
++	 * below removes what an earlier boot cached. Without the boot arguments nothing is mounted or made. */
++	uint32_t torch_ios = 0, torch_mode = 0;
++	if (PE_parse_boot_argn("dby-torch-ios", &torch_ios, sizeof(torch_ios)) && torch_ios == 1 &&
++	    PE_parse_boot_argn("dby-torch", &torch_mode, sizeof(torch_mode)) && torch_mode == 1) {
++		static const char torch_source[] = "/private/var/ngpu/mediacapture", torch_point[] = "/System/Library/MediaCapture";
++		native_gpu_addon_mount(p, scratch, 0xe00, torch_source, sizeof(torch_source), torch_point, sizeof(torch_point),
++		    "/System/Library/MediaCapture", "/System/Library/MediaCapture/H6ISP.mediacapture", &native_gpu_addon5_stage,
++		    &native_gpu_addon5_status);
++		if (dby_torch_ios_commit) {
++			dby_torch_ios_commit(native_gpu_addon5_stage == 5);
++		}
++	}
+ 	native_cryptex_os_view(p, scratch);
+ 	native_gestalt_cache_drop(p, scratch);
+ 	native_ls_store_drop(p, scratch);
