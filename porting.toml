@@ -600,6 +600,13 @@ command = "mdir -i payload-ord209.img ::/EFI/UniXNU/Payloads && mcopy -i payload
 revision = "a167df4c928876b460e4543a5755f77976ce2c92"
 result = "the accepted boot-s own carrier hashes to the pinned 423d4000... (1511664 B); the rebuilt payload (d1d71fed8d6e32c1 on kernel 05d697b0be1471b8) extracts to the same bytes and the gate reads checks=93 pass=93 fail=0, kernel_args_bytes=992, REGRESSION_GATE=0."
 
+[[area.evidence]]
+kind = "host"
+reference = "scripts/regression-baseline.json"
+command = "python3.11 scripts/check-regression.py -D ../UniXNU-dby_w09"
+revision = "0a6d3ceb548fd5874f7e0ec95eb0b5aa9fd91f49"
+result = "The recorded argument list moves with the board.toml line it pins, in the same commit: the baseline holds 48 arguments, the shipped payload line holds 49, the lost set is empty and the only addition is dby-torch=2, and the gate prints checks=93 pass=93 fail=0 with kernel_args_bytes=989. The baseline note names the reason for the addition, so the lost-argument row keeps guarding the 48 accepted arguments instead of going blind after an edit that was deliberate. This row supersedes the 992-byte readings recorded above, which were measured on their own trees."
+
 [[area]]
 id = "device-tree"
 status = "host-verified"
