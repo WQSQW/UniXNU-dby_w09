@@ -56,10 +56,13 @@ is this hardware's manual.
   step (12.5 mA), not 0.3 mA.
 - **On-time**: an "on" ends by itself after 5 minutes. Changing the level does not extend it; off and
   on again does.
-- **Faults**: `STATUS1` (short/open), `STATUS2`'s OTST and VPH-droop bits and `INT_RT_STS`, polled
-  every 100 ms while on and once immediately after switching on. Any fault, bus failure, timeout,
-  refusal or failed read-back switches the LED off (`EN_LED_CTRL` and `MOD_CTRL`, the one write
-  allowed after the bus closed) and keeps the driver off until reboot.
+- **Faults**: `STATUS1` (short/open) and `STATUS2`'s VPH-droop bit are [V]'s two, and [V] reads them
+  under one condition - its led-fault-irq branch (`leds-qpnp-flash-v2.c:1992-2013`), the interrupt the
+  board DTs put at `INT_RT_STS` bit 0. So the port stops the LED only while that line says so, and then
+  with the ordinary switch_disable ladder, leaving the driver ready for the next request; `INT_RT_STS`
+  alone and the thermal OTST level are evidence and a derate, never a stop. A bus failure, timeout,
+  refusal or failed read-back is the other case: it switches the LED off (`EN_LED_CTRL` and `MOD_CTRL`,
+  the one write allowed after the bus closed) and keeps the driver off until reboot.
 - **Heat derates, it does not stop**: [D] sets `qcom,thermal-derate-en` with 200/500/1000 mA, and
   [V]:1290-1318 turns a non-zero OTST level into a reprogram of `TGR_CURRENT` alone. One deviation
   from [V] is recorded in `DbyTorchRegs.h`: the vendor's `thermal_derate_current[otst >> 1]` reads

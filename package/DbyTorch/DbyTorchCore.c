@@ -12,9 +12,12 @@
  * The light is derated, not stopped, by heat, because the vendor says so: [D] sets
  * qcom,thermal-derate-en with qcom,thermal-derate-current = <200 500 1000> and [V]:1290-1318 feeds
  * that table to min(max_avail_current, thermal_current_lim) - which for a torch is a reprogram of
- * TGR_CURRENT alone, the branch [V]:1667-1681 already exists for. STATUS1 non-zero is short/open
- * ([V]:1985 pr_emerg) and STATUS2 BIT(4) is a VPH droop ([V]:34); either one is the emergency stop,
- * and after any failure, refusal, timeout or failed read-back the bus closes and stays closed. */
+ * TGR_CURRENT alone, the branch [V]:1667-1681 already exists for. STATUS1 non-zero is short/open and
+ * STATUS2 BIT(4) a VPH droop, and [V] reads both in one place only: its led-fault-irq branch
+ * ([V]:1992-2013), the line the board DTs put at INT_RT_STS bit 0. With that line clear the two status
+ * bytes are evidence, not a stop, and a lamp fault goes through the ordinary off ladder so the next
+ * request can light again; after a bus failure, refusal, timeout or failed read-back the bus closes
+ * and stays closed. */
 #include "DbyTorchCore.h"
 #include "DbyTorchText.h"
 
@@ -144,11 +147,16 @@ static void status_fields(DbtText *x, const uint8_t s[3])
 }
 
 /* ---- faults and derate ---- */
-/* The vendor's two hard faults, and only its two: STATUS1 any bit is short/open ([V]:1985-1990) and
- * STATUS2 BIT(4) is the VPH droop ([V]:34, and [D] enables qcom,vph-droop-det). Thermal OTST is
- * deliberately absent - it derates here, it does not stop. */
+/* The vendor's two hard faults, and only its two: STATUS1 any bit is short/open ([V]:2007-2009) and
+ * STATUS2 BIT(4) is the VPH droop ([V]:34,2011, and [D] enables qcom,vph-droop-det). Thermal OTST is
+ * deliberately absent - it derates here, it does not stop.
+ * [V] reads both bytes in one branch only: led-fault-irq ([V]:1992), which every recorded board's DT
+ * puts at INT_RT_STS bit 0. Reading them while that line is clear is not the vendor's mechanism, and
+ * ord214 paid for the difference: the module's ramp-up left STATUS1=01 with the fault line clear and
+ * this port called a working light a short/open. */
 static const char *fault_of(const DbtCore *t)
 {
+    if (!(t->sts[2] & DBT_V_LED_FAULT)) return 0;
     if (t->sts[0]) return "short-or-open";
     if (t->sts[1] & DBT_V_VPH_DROOP) return "vph-droop";
     return 0;
@@ -192,6 +200,38 @@ static int fault(DbtCore *t, const char *why, int rc)
         trace(t, buf);
     }
     return -5;
+}
+
+static int torch_off(DbtCore *t);
+
+/* A lamp fault is [V]'s fault branch, and [V] touches nothing there but the log: the module has
+ * already stopped itself. So this puts the light away with the accepted switch_disable ladder and
+ * leaves the gate open, which lets the next request re-run the light-up. Keeping the driver shut
+ * until reboot was this port's own rule, and it is what made the switch dead for the whole boot; a
+ * bus failure is a different thing - the windows are gone - and still latches through fault(). */
+static void lamp_fault(DbtCore *t, const char *why)
+{
+    const int rc = torch_off(t);
+    ++t->faults;
+    t->why = why;
+    t->last_rc = -5;
+    if (rc == DBT_OK) ++t->offs;
+    if (t->fault_lines < FAULT_LINES) {
+        ++t->fault_lines;
+        char buf[LINE];
+        DbtText x;
+        begin(&x, buf);
+        dbt_text_str(&x, "FAULT ");
+        dbt_text_str(&x, why);
+        dbt_text_kd(&x, "rc", -5);
+        dbt_text_kd(&x, "off", rc);
+        status_fields(&x, t->sts);
+        dbt_text_kx(&x, "reg", t->spmi.last_reg);
+        dbt_text_kx(&x, "status", t->spmi.last_status);
+        dbt_text_kd(&x, "refused", (int64_t)t->spmi.refused);
+        dbt_text_str(&x, ": off, and the next request lights it again");
+        trace(t, buf);
+    }
 }
 
 /* STATUS1, STATUS2, INT_RT_STS. Three one-byte transactions: this arbiter's accepted shape on this
@@ -504,7 +544,10 @@ static int torch_on(DbtCore *t, unsigned code, unsigned ires_idx)
     rc = read_status(t, t->sts);
     if (rc) return fault(t, "status-read", rc);
     const char *f = fault_of(t);
-    if (f) return fault(t, f, -5);
+    if (f) {
+        lamp_fault(t, f);
+        return -5;
+    }
     const unsigned lim = thermal_limit_ma(t->sts[1]);
     if (lim && lim < t->ma) return apply_derate(t, lim);
     return DBT_OK;
@@ -585,7 +628,7 @@ uint32_t dbt_core_poll(DbtCore *t)
     }
     const char *f = fault_of(t);
     if (f) {
-        fault(t, f, -5);
+        lamp_fault(t, f);
         return 0;
     }
     const unsigned lim = thermal_limit_ma(t->sts[1]);

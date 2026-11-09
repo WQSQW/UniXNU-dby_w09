@@ -545,6 +545,13 @@ model = "huawei,dby_w09"
 artwork-device-subtype = 2160
 thin-bezel = 1
 
+# /product/camera 的 flash：手电筒开关的原生判据。docs/guide/mobilegestalt.md:14-32 把 /product 的属性列为构建期 ADT
+# 输入，devicetree.py:280-287 把 [adt.*] 表里任何非属性键做成同一形式的子节点，所以这里写 [adt.product.camera.u32]；
+# refer/PaganiDrivers/drivers/PaganiTorch/README.md:76 说的就是 [AVFlashlight hasFlashlight] 读
+# IODeviceTree:/product/camera 的 flash 存在与否。u32 1 与内核 package/DbyTorch/DbyTorchIos.cpp 的 putFlash 同形。
+[adt.product.camera.u32]
+flash = 1
+
 # 本板没实现 suspend/resume：用原始根域策略输入，而不是让 CPU 永久停车。
 [adt.defaults.u32]
 sleep-disabled = 1

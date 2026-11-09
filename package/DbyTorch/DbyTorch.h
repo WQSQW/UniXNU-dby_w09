@@ -22,8 +22,10 @@
  *                         H6ISP.mediacapture plug-in is visible on the root, so the Control Center
  *                         button is never a button that does nothing
  *
- * An "on" ends by itself after 5 minutes; any bus failure, refusal, failed read-back or fault bit
- * switches the LED off, closes the write gate and keeps the driver off until reboot. */
+ * An "on" ends by itself after 5 minutes. A bus failure, a refusal or a failed read-back switches
+ * the LED off, closes the write gate and keeps the driver off until reboot. A lamp fault - STATUS1
+ * or STATUS2 while the vendor's led-fault-irq line is set, the only reading [V]:1992 makes of those
+ * two bytes - only puts the light away: the gate stays open and the next request lights it again. */
 #ifndef DBY_TORCH_H
 #define DBY_TORCH_H
 #include <stdint.h>

@@ -372,40 +372,52 @@ static void thermal(void)
 
 static void faults(void)
 {
-    /* STATUS1 any bit: the vendor's own pr_emerg calls it a short or an open, and this port answers
-     * by switching the channel and the module off and refusing the light until reboot */
+    /* STATUS1 any bit *with the vendor's own condition met*: [V]:1992-2009 reads the byte inside the
+     * led-fault-irq branch, and the board DTs name INT_RT_STS bit 0 that interrupt, so the fixture
+     * raises both. The answer is the light out through switch_disable - the enable bit, the module
+     * bit, the target current and the disabled timer, in [V]'s order - and an open gate. */
     static const uint8_t s1[] = {0x01u, 0x02u, 0x04u, 0x10u, 0x80u, 0xFFu};
     for (unsigned i = 0; i < sizeof s1 / sizeof s1[0]; ++i) {
         boot_ok(DBT_MODE_ON, 0u, 2u, DBT_OK);
-        m_fault_now(&m, s1[i], 0u, 0u);
-        const unsigned n = m.log_n;
+        m_fault_now(&m, s1[i], 0u, DBT_V_LED_FAULT);
         CHECK(dbt_core_set(&t, DBT_LEVEL_MAX, 0u, "cc") == -5);
-        CHECK(t.state == DBT_ST_FAULT && t.spmi.closed == 1 && m.lit == 0);
+        CHECK(t.state == DBT_ST_OFF && t.spmi.closed == 0 && m.lit == 0);
+        CHECK(m.reg[DBT_R_EN_LED_CTRL] == 0u && m.reg[DBT_R_MOD_CTRL] == 0u);
+        CHECK(m.reg[DBT_R_TGR_CURRENT] == 0u && m.reg[DBT_R_SAFETY_TMR] == (uint8_t)DBT_TORCH_TMR);
         CHECK(m_logged(&m, "FAULT short-or-open"));
-        /* the stop is the vendor's order and it is the last thing written */
-        SEQ(n + 6u, "4c=00 46=00");
-        CHECK(dbt_core_set(&t, DBT_LEVEL_MAX, 0u, "again") == -5);
-        CHECK(dbt_core_poll(&t) == 0u);
-        CHECK(m.log_n == n + 8u);                          /* nothing after the stop */
+        /* and the next request is served: a lamp fault is not a reason to lose the torch for the boot */
+        m.fault_s1 = 0u;
+        m.fault_armed = 0;
+        CHECK(dbt_core_set(&t, DBT_LEVEL_MAX, 0u, "again") == DBT_OK);
+        CHECK(t.state == DBT_ST_ON && m.lit == 1 && t.faults == 1u);
         CLEAN();
     }
-    /* STATUS2 bit 4 is the VPH droop, which [D] enables on this board */
+    /* STATUS2 bit 4 is the VPH droop, which [D] enables on this board - under the same fault line */
     boot_ok(DBT_MODE_ON, 0u, 2u, DBT_OK);
-    m_fault_now(&m, 0u, DBT_V_VPH_DROOP, 0u);        /* STATUS2 bit 4, from the first status read */
+    m_fault_now(&m, 0u, DBT_V_VPH_DROOP, DBT_V_LED_FAULT);
     CHECK(dbt_core_set(&t, DBT_LEVEL_MAX, 0u, "cc") == -5);
-    CHECK(t.state == DBT_ST_FAULT && m.lit == 0);
+    CHECK(t.state == DBT_ST_OFF && m.lit == 0);
     CHECK(m_logged(&m, "FAULT vph-droop"));
     /* a fault that arrives while the light is already on stops it on the next poll */
     boot_ok(DBT_MODE_ON, 0u, 2u, DBT_OK);
     CHECK(dbt_core_set(&t, DBT_LEVEL_MAX, 0u, "cc") == DBT_OK);
     m.fault_s1 = 0x01u;
+    m.fault_s3 = DBT_V_LED_FAULT;
     m.fault_armed = 1;                              /* and the clock does move here: m_run below */
     m.fault_at_us = m.now_us + 500000ull;                  /* half a second from now */
     m_run(&m, &t, 1000000ull);
-    CHECK(t.state == DBT_ST_FAULT && m.lit == 0 && t.faults == 1u);
-    /* and the interrupt-status byte alone is not one of the vendor's two faults */
+    CHECK(t.state == DBT_ST_OFF && m.lit == 0 && t.faults == 1u);
+    /* the interrupt-status byte with no status behind it is [V] printing nothing, so it stops nothing,
+     * and ord214's real reading is the same rule the other way: a ramp-up STATUS1 with bit 0 clear -
+     * STATUS1=01, INT_RT_STS=90, the fault line low - must not put a working light out */
     boot_ok(DBT_MODE_ON, 0u, 2u, DBT_OK);
-    m_fault_now(&m, 0u, 0u, 0xFFu);                 /* only the interrupt-status byte */
+    m_fault_now(&m, 0x01u, 0u, 0x90u);
+    CHECK(dbt_core_set(&t, DBT_LEVEL_MAX, 0u, "cc") == DBT_OK);
+    CHECK(t.state == DBT_ST_ON && m.lit == 1 && t.faults == 0u);
+    CHECK(dbt_core_poll(&t) == t.cfg.poll_ms);
+    CLEAN();
+    boot_ok(DBT_MODE_ON, 0u, 2u, DBT_OK);
+    m_fault_now(&m, 0u, 0u, 0xFFu);                 /* the whole interrupt byte, no status detail */
     CHECK(dbt_core_set(&t, DBT_LEVEL_MAX, 0u, "cc") == DBT_OK);
     CHECK(t.state == DBT_ST_ON && m.lit == 1 && t.faults == 0u);
     CHECK(dbt_core_poll(&t) == t.cfg.poll_ms);

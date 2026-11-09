@@ -33,7 +33,11 @@ int main(void)
     CHECK(dbt_ios_level(1001) == -22 && dbt_ios_level(0x100000000ull) == -22 && dbt_ios_level(~0ull) == -22);
     /* the names the other side looks for */
     CHECK(!strcmp(DBT_IOS_SERVICE, "AppleH6CamIn"));
-    CHECK(!strcmp(DBT_IOS_PARENT "/" DBT_IOS_NODE, "IODeviceTree:/product/camera"));
+    CHECK(!strcmp(DBT_IOS_PARENT "/" DBT_IOS_NODE, "/product/camera"));
+    /* DBT_IOS_PARENT goes to fromPath with gIODTPlane, so a plane prefix could never be peeled off;
+     * DBT_IOS_NODE goes to childFromPath, which walks exactly one component of the plane. */
+    CHECK(!strchr(DBT_IOS_PARENT, ':') && DBT_IOS_PARENT[0] == '/');
+    CHECK(!strchr(DBT_IOS_NODE, ':') && !strchr(DBT_IOS_NODE, '/'));
     CHECK(!strcmp(DBT_IOS_FLASH, "flash") && !strcmp(DBT_IOS_PROCESS, "mediaserverd"));
     CHECK(!strcmp(DBT_IOS_NODE, "camera") && !strcmp(DBT_IOS_CLIENT, "DbyTorchUserClient"));
     printf("PASS ios: %u checks\n", checks);

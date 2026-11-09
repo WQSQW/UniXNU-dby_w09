@@ -94,6 +94,7 @@
 #define DBT_M_THERMAL_THRSH 0x07u             /* GENMASK(2,0) */
 #define DBT_M_OTST          0x07u             /* FLASH_LED_THERMAL_OTST_MASK in STATUS2 */
 #define DBT_V_VPH_DROOP     0x10u             /* FLASH_LED_VPH_DROOP_FAULT_MASK = BIT(4) in STATUS2 */
+#define DBT_V_LED_FAULT     0x01u             /* [V]:1992,2843: the led-fault-irq the two status bytes are only read under; every recorded board's DT puts it at INT_RT_STS bit 0 */
 #define DBT_V_TMR_DISABLE   0x13u             /* FLASH_LED_SAFETY_TMR_DISABLED: bit7 clear, code 1 */
 #define DBT_V_ENABLE        0x01u             /* FLASH_LED_ENABLE = BIT(0), shifted by the channel id */
 

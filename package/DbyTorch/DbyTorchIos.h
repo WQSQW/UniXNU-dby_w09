@@ -56,8 +56,12 @@ void dby_torch_ios_commit(int plugin_visible);
  * calls. */
 extern volatile int32_t dby_torch_ios_status[4];
 
-/* Names. */
-#define DBT_IOS_PARENT       "IODeviceTree:/product"
+/* Names. DBT_IOS_PARENT is a bare path on purpose: makeNode() hands it to IORegistryEntry::fromPath
+ * together with gIODTPlane, and fromPath strips a "PlaneName:" prefix only when the plane argument is
+ * NULL (iokit/Kernel/IORegistryEntry.cpp:1584-1592), so with the prefix nothing under any plane can
+ * match it. ord214's "no /product in the device tree" was that string, not a missing node - the same
+ * payload's ADT carries /product/camera flash = 1. */
+#define DBT_IOS_PARENT       "/product"
 #define DBT_IOS_NODE         "camera"
 #define DBT_IOS_FLASH        "flash"
 #define DBT_IOS_SERVICE      "AppleH6CamIn"            /* CMCapture's table, the last entry */

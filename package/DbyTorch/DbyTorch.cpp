@@ -11,9 +11,11 @@
 // (chnls + DBT_ARB_PAGE * apid, DbyTorchSpmi.c through ioChanMap). Then it serves level requests
 // and, while the LED is on, polls the fault registers and the 5-minute deadline. All register access
 // happens on that thread, so nothing ever touches SPMI from two CPUs at once and no caller waits on
-// the bus. A dry run, a refusal or a fault unmaps everything and ends the thread; every request then
-// returns -19. Every step is a "[torch]" line on kprintf - this board's COM4 mirrors kprintf rows and
-// no IOLog row (DbyBattery.cpp:77-86) - and a word in dby_torch_status.
+// the bus. A dry run, a refusal or a bus fault unmaps everything and ends the thread; every request
+// then returns -19. A lamp fault is not that: the core puts the light away and waits in the off
+// state, so the thread keeps serving and the next request lights it again (lamp_fault,
+// DbyTorchCore.c). Every step is a "[torch]" line on kprintf - this board's COM4 mirrors kprintf
+// rows and no IOLog row (DbyBattery.cpp:77-86) - and a word in dby_torch_status.
 #include <IOKit/IOLib.h>
 #include <IOKit/IODeviceMemory.h>
 #include <IOKit/IOMemoryDescriptor.h>
@@ -189,7 +191,7 @@ void torchThread(void *, wait_result_t)
     uint32_t sleep = dbt_core_poll(gTorch);
     exportStatus();
     for (;;) {
-        if (gTorch->state == DBT_ST_FAULT) {   // stopped by the core; off until reboot
+        if (gTorch->state == DBT_ST_FAULT) {   // a bus fault latched in the core: the windows are gone
             __atomic_store_n(&gReady, 0u, __ATOMIC_RELEASE);
             serveRequest(served);              // a caller still waiting gets the fault, not the timeout
             exportStatus();
