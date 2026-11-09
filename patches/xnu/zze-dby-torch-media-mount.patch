@@ -18,7 +18,7 @@ diff --git a/bsd/kern/kern_exec.c b/bsd/kern/kern_exec.c
  	native_gpu_addon_mount(p, scratch, 0xa00, audio_source, sizeof(audio_source), audio_point, sizeof(audio_point),
  	    "/System/Library/Audio/Plug-Ins/HAL/BuiltinAudioPlugin.driver", "/System/Library/Audio/Plug-Ins/HAL/ShengAudio.driver/Info.plist",
  	    &native_gpu_addon4_stage, &native_gpu_addon4_status);
-+	/* The iOS flashlight (boot-arg dby-torch-ios=1 with dby-torch=1: package/DbyTorch, DbyTorchIos.h). CMCapture opens
++	/* The iOS flashlight (boot-arg dby-ti=1 with dby-torch=1: package/DbyTorch, DbyTorchIos.h). CMCapture opens
 +	 * /System/Library/MediaCapture/H6ISP.mediacapture in mediaserverd once a service of class AppleH6CamIn exists; that
 +	 * directory is empty on the root and the file is not in the shared cache, so the owner overlay
 +	 * /private/var/ngpu/mediacapture (scripts/add-dby-torch-data.py) can hold the plug-in. The root has no entry there to
@@ -29,7 +29,7 @@ diff --git a/bsd/kern/kern_exec.c b/bsd/kern/kern_exec.c
 +	 * plug-in visible: no button that does nothing. This is the last stop before launchd, and native_gestalt_cache_drop
 +	 * below removes what an earlier boot cached. Without the boot arguments nothing is mounted or made. */
 +	uint32_t torch_ios = 0, torch_mode = 0;
-+	if (PE_parse_boot_argn("dby-torch-ios", &torch_ios, sizeof(torch_ios)) && torch_ios == 1 &&
++	if (PE_parse_boot_argn("dby-ti", &torch_ios, sizeof(torch_ios)) && torch_ios == 1 &&
 +	    PE_parse_boot_argn("dby-torch", &torch_mode, sizeof(torch_mode)) && torch_mode == 1) {
 +		static const char torch_source[] = "/private/var/ngpu/mediacapture", torch_point[] = "/System/Library/MediaCapture";
 +		native_gpu_addon_mount(p, scratch, 0xe00, torch_source, sizeof(torch_source), torch_point, sizeof(torch_point),

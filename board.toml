@@ -425,7 +425,15 @@ kernel_args = [
   # 删它同时改 scripts/regression-baseline.json 的 args：那次提交里写明原因，"丢参数"这条继续守剩下 48 条。
   # 账：49 项、989 字节、余 11。开机自测（dby-torch=1 配 dby-torch-test=NNNN）要 31 字节，现在付不起，
   # 所以看得见的亮灯走原生 API 那一半：mode 1 起来挂起，等 IOService 侧调用。
-  "dby-torch=2",
+  "dby-torch=1",
+  # 2026-11-09 dby-ti=1（8 字节）：iOS 手电筒原生面的开关，读者是 package/DbyTorch/DbyTorchIos.cpp 的
+  # dby_torch_ios_plan/commit 与本板钉住的 patches/xnu/zze-dby-torch-media-mount.patch 那一行。母本写作
+  # pagani-torch-ios，按本板短名规范（dby-bl、dby-pa 同法）改拼成 dby-ti：原名连分隔符 16 字节，989+16=1005
+  # 越不过 payload.py:35 的 1000 字节硬门，而 49 条参数的读取点逐条穷举后没有一条能删——offline-legacy-*
+  # 全是 NativeLegacyDisplay.cpp 的显示活门，kt_fixed_zones=120 把 XNU 默认 260 压到 120，dk=0 关掉默认开的
+  # DriverKit 调试，panic_on_crash_disabled=1 让守护进程崩了还能读串口，-enable_kprintf_spam 是 kprintf
+  # 到串口的唯一通路。换名后 50 条、998 字节、余 2，一条功能参数也没少。
+  "dby-ti=1",
   # port-sm8250.md §7.7：qcom-usb-debug=1 单独加、加在最后，一次刷写只回答一个问题。
   # 这是 QcomXnuUsbDebug 唯一的启用开关（kernel/QcomXnuUsbDebug.c 读它）；不加它归档虽然
   # force_load 进来，六个单元的补丁调用点全部保持关闭。qcom-usb-ctl=1（Mac 反向控制）这次

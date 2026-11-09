@@ -47,10 +47,10 @@ class MountPatch(unittest.TestCase):
         self.assertEqual(len(re.findall(r'^@@ ', patch_text, re.M)), 2, 'the patch is two hunks: the counters and the call')
 
     def test_the_gate_is_the_two_boot_arguments(self):
-        self.assertIn('PE_parse_boot_argn("dby-torch-ios", &torch_ios, sizeof(torch_ios)) && torch_ios == 1', patch_text)
+        self.assertIn('PE_parse_boot_argn("dby-ti", &torch_ios, sizeof(torch_ios)) && torch_ios == 1', patch_text)
         self.assertIn('PE_parse_boot_argn("dby-torch", &torch_mode, sizeof(torch_mode)) && torch_mode == 1', patch_text)
         glue = (ROOT / 'package/DbyTorch/DbyTorch.cpp').read_text()
-        for name in ('dby-torch-ios', 'dby-torch'):
+        for name in ('dby-ti', 'dby-torch'):
             self.assertIn('"%s"' % name, glue, f'the glue does not read {name} either')
             self.assertIn(name, README.read_text(), f'{name} is not in the README table')
 

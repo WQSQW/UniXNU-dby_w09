@@ -12,7 +12,7 @@
 // makes the others, in the IODeviceTree plane only. The user client takes one call, the level, and
 // switches the LED off when its process goes away. Every line here is a "[torch]" row on kprintf -
 // this board's COM4 mirrors kprintf rows and no IOLog row (DbyTorch.cpp:77) - so unlike PaganiTorch
-// nothing is logged twice. Without dby-torch-ios nothing here runs and nothing is logged; a refusal
+// nothing is logged twice. Without dby-ti nothing here runs and nothing is logged; a refusal
 // or failure is logged and leaves the tree as it was. Never panics.
 #include <IOKit/IOLib.h>
 #include <IOKit/IOService.h>

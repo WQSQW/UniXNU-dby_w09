@@ -20,7 +20,7 @@ int dbt_ios_plan(unsigned ios, unsigned torch, DbtIosPlan *plan)
         refuse(plan, "off");
         return 0;
     }
-    if (ios != 1) return refuse(plan, "dby-torch-ios takes 1");
+    if (ios != 1) return refuse(plan, "dby-ti takes 1");
     if (torch != 1) return refuse(plan, "needs dby-torch=1 (the driver running)");
     plan->create = 1;
     plan->why = "";

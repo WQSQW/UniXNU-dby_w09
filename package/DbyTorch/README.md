@@ -19,7 +19,7 @@ yet earned. Default off: without the boot arguments nothing runs, maps, allocate
 iOS-facing half — the Control Center flashlight button reaching this driver — has its kernel side
 written (`## The flashlight of iOS`): `DbyTorchIos.*` is that side, the MediaCapture mount and the
 `H6ISP.mediacapture` plug-in are the other two, and none of it is armed until the boot arguments carry
-`dby-torch-ios=1`.
+`dby-ti=1`.
 
 ## Sources (facts only, no code copied)
 
@@ -93,19 +93,30 @@ is this hardware's manual.
 | `dby-torch-max-ma` | the current at level 1000; default 300 ([D] `qcom,current-ma`), at most 500 ([D] `qcom,max-current`), never below one resolution step |
 | `dby-torch-test` | bring-up: on at level 1000 for this many ms (at most 1000) right after the initialization, then off (mode 1) |
 | `dby-torch-log=0/1/2` | failures only / rationed (default: the first 8 changes, then one per 5 minutes, at most 24 a boot) / every change (at most 64) |
-| `dby-torch-ios=1` | the iOS flashlight surface (`## The flashlight of iOS`): the `AppleH6CamIn` service, its mediaserverd-only user client and `IODeviceTree:/product/camera` `flash`, made just before launchd. Absent or 0: `DbyTorchIos.cpp` never runs and logs nothing. 1 with `dby-torch` not 1 is refused in the log, and 1 without the plug-in visible on the root is refused too, so a button is never a button that does nothing |
+| `dby-ti=1` | the iOS flashlight surface (`## The flashlight of iOS`): the `AppleH6CamIn` service, its mediaserverd-only user client and `IODeviceTree:/product/camera` `flash`, made just before launchd. Absent or 0: `DbyTorchIos.cpp` never runs and logs nothing. 1 with `dby-torch` not 1 is refused in the log, and 1 without the plug-in visible on the root is refused too, so a button is never a button that does nothing |
 
 Byte cost on the joined command line, measured 2026-11-09 against the device repository's own
 `kernel_args` list (the payload joins its entries with one space, so an entry costs its own length
-plus one separator, and the budget is 1000 bytes for the whole line): `dby-torch=2` is 11 characters,
-`dby-torch=1` 11, `dby-torch-ios=1` 15, `dby-torch-test=100` 18. The board's line at that date is 49
-entries and 989 bytes, 11 free; swapping `dby-torch=2` for `dby-torch=1 dby-torch-ios=1` costs 16
-more, so the armed torch round has to free 5 bytes of other arguments first, and `check-regression.py`
-is what says whether it did.
+plus one separator, and the budget is 1000 bytes for the whole line): `dby-torch=2` and `dby-torch=1`
+are 11 characters each and `dby-torch-test=100` is 18, while the mother's `pagani-torch-ios=1` would
+cost 19 here and this board's long spelling 16. The line before this round was 49 entries and 989
+bytes, 11 free, so the iOS switch under its long name needed 5 bytes taken from other arguments.
+All 49 were then read at their readers (feeds/xnu, upstream/core, this repository's package+scripts,
+the SoC feed and uefi-sheng) and none of them is dead: every `offline-legacy-*` row is a gate in
+NativeLegacyDisplay.cpp (gop at :383 returns false without it, pm and phase at :98-102 stop the
+display, register at :128, validate at :313, transfer at :149), `kt_fixed_zones=120` overrides XNU's
+own 260 (zalloc_internal.h:485; the 120 branch is watchOS-or-KASAN only), `dk=0` overrides IOKit's
+default-on DriverKit debug (IOKitDebug.h:134 kIODKEnable=1, IOUserServer.cpp:88),
+`panic_on_crash_disabled=1` is what keeps a crashed daemon from panicking the board
+(kern_exit.c:1695) and `-enable_kprintf_spam` is the only route that lets kprintf reach the console
+at all (pe_kprintf.c:50). So the switch takes the short board name - the same rule that paid for
+`dby-bl=1` where `sheng-backlight=1` would have cost twice - and the armed line measures 50 entries
+and 998 bytes with 2 free, read back from core's own `payload.check_args` rather than counted by hand.
 
-The first run on the device is `dby-torch=2` (a read-only take-over: it proves the windows, the
-arbiter version, the APID, the write EE and the identity bytes and writes nothing), then
-`dby-torch=1 dby-torch-test=100` (100 ms at full), then the API.
+The first run on the device was `dby-torch=2` (a read-only take-over: it proved the windows, the
+arbiter version, the APID, the write EE and the identity bytes and wrote nothing). The boot-time
+self-test `dby-torch=1 dby-torch-test=100` costs 31 joined bytes and cannot be afforded, which is
+why the visible light now goes through the API instead: `dby-torch=1 dby-ti=1`.
 
 ## Interfaces
 

@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: BSD-2-Clause-Patent */
 /* Copyright (c) 2026, UniXNU contributors. All rights reserved. */
-/* The flashlight of iOS without a camera (boot argument dby-torch-ios=1): what DbyTorchIos.cpp
+/* The flashlight of iOS without a camera (boot argument dby-ti=1): what DbyTorchIos.cpp
  * makes, decided here in portable C so the host tests run the same rules. PaganiTorch's TorchIos.h
  * is the shape; the evidence below is this board's own.
  *
@@ -24,7 +24,7 @@
  *    FigFlashlight only, with a stream whose TorchLevel goes to the user client;
  *  - the kernel adds /product/camera with "flash", only when the plug-in is visible and the driver
  *    runs: never a button that does nothing.
- * Without dby-torch-ios nothing here runs and nothing is logged. */
+ * Without dby-ti nothing here runs and nothing is logged. */
 #ifndef DBY_TORCH_IOS_H
 #define DBY_TORCH_IOS_H
 #include <stdint.h>
@@ -37,7 +37,7 @@ typedef struct {
     const char *why;           /* why not: "off", or the refusal for the boot log */
 } DbtIosPlan;
 
-/* The plan for the boot arguments dby-torch-ios (ios) and dby-torch (torch). 0: create, or off
+/* The plan for the boot arguments dby-ti (ios) and dby-torch (torch). 0: create, or off
  * (ios 0); -1: refused (plan->why). */
 int dbt_ios_plan(unsigned ios, unsigned torch, DbtIosPlan *plan);
 /* The plan just before launchd: driver_ready, the torch driver answers; plugin_visible, the addon

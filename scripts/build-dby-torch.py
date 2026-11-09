@@ -10,7 +10,7 @@ C++ record's flags). It is linked through CONFIG_XNU_EXTRA_LD_ARCHIVES, not forc
 names dby_torch_start(), so the plain archive path always pulls it. Kernel code here never uses floating point
 (-mgeneral-regs-only). Only DbyTorchIos.cpp may carry a static initializer, and its initializer is taken out of
 __DATA,__mod_init_func by llvm-objcopy and globalized as __GLOBAL__sub_I_DbyTorchIos.cpp, so the class is
-registered when dby_torch_ios_commit() asks for it and not at boot: a kernel without dby-torch-ios=1 gets neither
+registered when dby_torch_ios_commit() asks for it and not at boot: a kernel without dby-ti=1 gets neither
 the AppleH6CamIn class nor the service. That is the same late registration drivers/NativeLegacyDisplay uses. The
 objcopy is checked, not trusted: the __text bytes must be the ones the compiler produced and the section must be
 gone, because a renamed text section would change which instructions run. The other objects must carry no

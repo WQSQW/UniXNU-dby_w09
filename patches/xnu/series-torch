@@ -11,7 +11,7 @@
 # scripts/unixnu/patches.py:prepare 严格按解析出的顺序逐个 git apply，所以锚只在那一份跑完
 # 之后才存在。母本的同一形状见 refer/Pagani/patches/xnu/phone-torch-overlay.patch。
 #
-# 启用门是启动参数 dby-torch-ios=1 且 dby-torch=1：不带这两个参数时这里既不挂也不调，
+# 启用门是启动参数 dby-ti=1 且 dby-torch=1：不带这两个参数时这里既不挂也不调，
 # dby_torch_ios_commit 只经由它自己的 weak 绑定被引用，内核行为与今天逐字节一致。
 #
 zze-dby-torch-media-mount.patch

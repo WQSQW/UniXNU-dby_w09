@@ -49,6 +49,8 @@ CRITICAL_ARGS = {
     "sheng-aks=1": "KeyStore",
     "sheng-log=1": "日志",
     "sheng-cpufreq=3": "EPSS cpufreq",
+    "dby-torch=1": "\u624b\u7535\u7b52\u751f\u4ea7\u8005\u5b9e\u6a21\u5f0f\uff08DbyTorch\uff0c\u7b49\u539f\u751f API \u8c03\u7528\uff09",
+    "dby-ti=1": "iOS \u624b\u7535\u7b52\u539f\u751f\u9762\uff08AppleH6CamIn + /product/camera flash\uff09",
 }
 
 ARG_LIMIT_BYTES = 1000
