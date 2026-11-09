@@ -149,6 +149,9 @@ archives = [
   # 它走 defconfig 的 CONFIG_XNU_EXTRA_LD_ARCHIVES 普通路径，不是 force_load：BootProgress.c 里
   # dby_touch_probe_entry() 是强引用，链接器按未定义符号一定会把它拉进来。
   "build-dby-touch.py",
+  # 手电筒生产者：DbyTorch（PM8150L flash-v2，SM8250 v5 SPMI arbiter），产出 build/dby-torch/libDbyTorch.a。
+  # 同样走 defconfig 的 CONFIG_XNU_EXTRA_LD_ARCHIVES 普通路径：BootProgress.c 里 dby_torch_start() 是强引用。
+  "build-dby-torch.py",
   "build-gop-legacy-display.py",
   # CDC-ACM 控制台归档：官方入口是组件目录 spec（components.toml:513-534）调模块自己的
   # scripts/build.py，本 core 没有这条 spec 且 components.toml 只从 core 软链（tree.py:assemble），

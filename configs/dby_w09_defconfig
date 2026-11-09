@@ -127,7 +127,7 @@ CONFIG_XNU_DT_PANIC_REGION=y
 # 以后真链上某个组件时，真定义自动赢过桩。
 # DbyTouch 用普通归档路径（不 force_load）：BootProgress.c 强引用 dby_touch_probe_entry()，
 # 惰性拉取一定会发生；它内部的 stage 轮询线程由驱动自己起，不靠初始化函数被扫到。
-CONFIG_XNU_EXTRA_LD_ARCHIVES="{tree}/build/link-stubs/libLinkStubs.a {tree}/build/dby-touch/libDbyTouch.a"
+CONFIG_XNU_EXTRA_LD_ARCHIVES="{tree}/build/link-stubs/libLinkStubs.a {tree}/build/dby-touch/libDbyTouch.a {tree}/build/dby-torch/libDbyTorch.a"
 
 CONFIG_XNU_CRYPTO_BOOTSTRAP="prelinked"
 

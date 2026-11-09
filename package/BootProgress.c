@@ -107,8 +107,13 @@ extern volatile unsigned native_touch_stage_req __attribute__((weak_import));
 // (scripts/build-dby-touch.py). Naming it here is what makes the plain archive path pull it, and
 // the counters say so on the page: runs counts the attempts and ret the last return code.
 extern int dby_touch_probe_entry(void);
-static unsigned dby_touch_hook_runs;
+static unsigned dby_touch_hook_runs,dby_torch_hook_runs;
 static int dby_touch_hook_ret,dby_touch_probe_done;
+// The torch driver's entry, defined by build/dby-torch/libDbyTorch.a (scripts/build-dby-torch.py).
+// Naming it here is what makes the plain archive path pull that archive. It returns at once and does the rest
+// on its own thread; with no dby-torch boot argument it reads nothing and writes nothing, so calling it every
+// boot is inert. It reports what it decided as [torch] kprintf rows and in dby_torch_status[1].
+extern void dby_torch_start(void);
 extern volatile unsigned boot_process_passes,boot_process_seen __attribute__((weak_import));
 extern volatile unsigned boot_process_attempts __attribute__((weak_import));
 extern volatile unsigned boot_process_busy __attribute__((weak_import));
@@ -1122,6 +1127,13 @@ static void monitor(void *arg, wait_result_t result) {
         dby_touch_hook_ret=dby_touch_probe_entry();
         if(dby_touch_hook_ret!=0)__atomic_store_n(&dby_touch_probe_done,0,__ATOMIC_RELEASE);
       }
+    }
+    // Torch bring-up: the same context rule as touch (kernel_thread_start needs a thread, not an
+    // interrupt) and after the first user process exists. The call guards itself against running
+    // twice, so this is one shot: start returns void and says why it stopped in dby_torch_status[1].
+    if(!dby_torch_hook_runs && !ml_at_interrupt_context() && nprocs>0) {
+      dby_torch_hook_runs=1;
+      dby_torch_start();
     }
     if(boot_ui_trace_snapshot)boot_ui_trace_snapshot(now);
     if(&boot_process_attempts && &boot_process_busy) {
